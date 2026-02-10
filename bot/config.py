@@ -7,8 +7,11 @@ load_dotenv()
 
 BOT_TOKEN: str = os.getenv("BOT_TOKEN", "")
 TIMEZONE: str = os.getenv("TIMEZONE", "Asia/Almaty")
-MORNING_HOUR: int = int(os.getenv("MORNING_HOUR", "8"))
+MORNING_HOUR: int = int(os.getenv("MORNING_HOUR", "7"))
 MORNING_MINUTE: int = int(os.getenv("MORNING_MINUTE", "0"))
+REMINDER_HOURS: list[int] = [
+    int(h) for h in os.getenv("REMINDER_HOURS", "12,17").split(",")
+]
 EVENING_HOUR: int = int(os.getenv("EVENING_HOUR", "21"))
 EVENING_MINUTE: int = int(os.getenv("EVENING_MINUTE", "0"))
 PARENT_PASSWORD: str = os.getenv("PARENT_PASSWORD", "1234")

@@ -1,5 +1,7 @@
 """Pure scoring functions — no DB or I/O."""
 
+from __future__ import annotations
+
 from datetime import date
 
 from .tasks_config import (
@@ -26,6 +28,18 @@ def get_money_percentage(total_points: int) -> int:
         if min_pts <= total_points <= max_pts:
             return pct
     return 0
+
+
+def points_to_next_tier(total_points: int) -> tuple[int, int] | None:
+    """Return (points_needed, next_percentage) or None if already at max."""
+    sorted_tiers = sorted(MONEY_TIERS, key=lambda t: t[0])
+    current_pct = get_money_percentage(total_points)
+    for min_pts, _, pct in sorted_tiers:
+        if pct > current_pct:
+            deficit = min_pts - total_points
+            if deficit > 0:
+                return deficit, pct
+    return None
 
 
 def calculate_weekly_result(
@@ -82,6 +96,53 @@ def format_daily_summary(
         lines.append("\n⚠️ Душ не принят — баллы за день: 0")
     else:
         lines.append(f"\nБаллы за день: {points}/{max_pts}")
+
+    return "\n".join(lines)
+
+
+def format_child_evening_summary(
+    child_name: str,
+    day: date,
+    completed_keys: set[str],
+    weekly_points_so_far: int,
+    days_left: int,
+) -> str:
+    """Evening message for the child with today's score and weekly progress."""
+    daily_pts = calculate_daily_points(completed_keys)
+    max_daily = len(DAILY_TASKS)
+
+    lines = [
+        f"🌙 <b>Итоги твоего дня ({day.strftime('%d.%m')})</b>",
+        "",
+    ]
+
+    if SHOWER_KEY not in completed_keys:
+        lines.append("⚠️ Ты не принял душ — баллы за сегодня: 0")
+    else:
+        lines.append(f"Сегодня ты набрал: <b>{daily_pts}/{max_daily}</b> баллов")
+
+    total = weekly_points_so_far + daily_pts
+    lines.append(f"За неделю пока: <b>{total}</b> баллов")
+
+    current_pct = get_money_percentage(total)
+    lines.append(f"Сейчас твой уровень: <b>{current_pct}%</b> карманных денег")
+
+    next_tier = points_to_next_tier(total)
+    if next_tier:
+        deficit, next_pct = next_tier
+        if days_left > 0:
+            lines.append(
+                f"\nДо <b>{next_pct}%</b> не хватает <b>{deficit}</b> баллов "
+                f"(осталось {days_left} дн.)."
+            )
+            lines.append(
+                "Попроси маму или папу дать дополнительное задание, "
+                "чтобы не испортить рейтинг!"
+            )
+        else:
+            lines.append(f"\nДо <b>{next_pct}%</b> не хватило <b>{deficit}</b> баллов.")
+    elif current_pct == 100:
+        lines.append("\nТы на максимуме — так держать! 🎉")
 
     return "\n".join(lines)
 

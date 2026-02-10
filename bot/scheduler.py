@@ -1,11 +1,19 @@
 import logging
+import random
 from datetime import date, timedelta
 
 from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from .config import EVENING_HOUR, EVENING_MINUTE, MORNING_HOUR, MORNING_MINUTE, TIMEZONE
+from .config import (
+    EVENING_HOUR,
+    EVENING_MINUTE,
+    MORNING_HOUR,
+    MORNING_MINUTE,
+    REMINDER_HOURS,
+    TIMEZONE,
+)
 from .database import (
     get_all_families,
     get_completed_keys_for_date,
@@ -14,8 +22,13 @@ from .database import (
     get_family_parents,
 )
 from .handlers.child import send_checklist
-from .scoring import format_daily_summary, format_weekly_report
-from .tasks_config import SUNDAY_TASK
+from .scoring import (
+    calculate_daily_points,
+    format_child_evening_summary,
+    format_daily_summary,
+    format_weekly_report,
+)
+from .tasks_config import DAILY_TASKS, REMINDER_MESSAGES, SUNDAY_TASK
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +36,7 @@ logger = logging.getLogger(__name__)
 def setup_scheduler(bot: Bot) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone=TIMEZONE)
 
-    # Morning checklist
+    # Morning checklist at 7:00
     scheduler.add_job(
         morning_checklist,
         CronTrigger(hour=MORNING_HOUR, minute=MORNING_MINUTE, timezone=TIMEZONE),
@@ -32,7 +45,17 @@ def setup_scheduler(bot: Bot) -> AsyncIOScheduler:
         replace_existing=True,
     )
 
-    # Evening summary at 21:00 (configurable)
+    # Reminders for incomplete tasks (default: 12:00, 17:00)
+    for i, hour in enumerate(REMINDER_HOURS):
+        scheduler.add_job(
+            send_reminders,
+            CronTrigger(hour=hour, minute=0, timezone=TIMEZONE),
+            args=[bot],
+            id=f"reminder_{i}",
+            replace_existing=True,
+        )
+
+    # Evening summary at 21:00 — to parents AND child
     scheduler.add_job(
         evening_summary,
         CronTrigger(hour=EVENING_HOUR, minute=EVENING_MINUTE, timezone=TIMEZONE),
@@ -70,31 +93,103 @@ async def morning_checklist(bot: Bot) -> None:
                 )
 
 
+async def send_reminders(bot: Bot) -> None:
+    """Send motivational reminders to children with incomplete tasks."""
+    logger.info("Sending reminders")
+    today = date.today()
+    today_str = today.isoformat()
+
+    families = await get_all_families()
+    for family in families:
+        children = await get_family_children(family["id"])
+        for child in children:
+            try:
+                completed = await get_completed_keys_for_date(child["id"], today_str)
+                all_daily_keys = {t.key for t in DAILY_TASKS}
+                remaining = all_daily_keys - completed
+                if not remaining:
+                    continue
+
+                msg = random.choice(REMINDER_MESSAGES)
+                remaining_count = len(remaining)
+                text = (
+                    f"{msg}\n\n"
+                    f"⬜ Осталось задач: <b>{remaining_count}</b> из {len(DAILY_TASKS)}"
+                )
+                await bot.send_message(
+                    child["telegram_id"], text, parse_mode="HTML"
+                )
+            except Exception as e:
+                logger.error(
+                    "Failed to send reminder to %s: %s",
+                    child["telegram_id"],
+                    e,
+                )
+
+
 async def evening_summary(bot: Bot) -> None:
-    """Send daily summary to all parents at evening."""
+    """Send daily summary to parents + child evening report with deficit."""
     logger.info("Sending evening summaries")
     today = date.today()
     today_str = today.isoformat()
     is_sunday = today.weekday() == 6
+
+    # Days left in the week (today is already counted)
+    days_left = 6 - today.weekday()  # 0=Mon..6=Sun
+
+    # Week start (Monday)
+    week_start = today - timedelta(days=today.weekday())
 
     families = await get_all_families()
     for family in families:
         children = await get_family_children(family["id"])
         parents = await get_family_parents(family["id"])
         for child in children:
-            completed = await get_completed_keys_for_date(child["id"], today_str)
-            text = format_daily_summary(child["name"], today, completed, is_sunday)
-            for parent in parents:
-                try:
-                    await bot.send_message(
-                        parent["telegram_id"], text, parse_mode="HTML"
-                    )
-                except Exception as e:
-                    logger.error(
-                        "Failed to send summary to %s: %s",
-                        parent["telegram_id"],
-                        e,
-                    )
+            try:
+                completed_today = await get_completed_keys_for_date(
+                    child["id"], today_str
+                )
+
+                # Parent summary
+                parent_text = format_daily_summary(
+                    child["name"], today, completed_today, is_sunday
+                )
+                for parent in parents:
+                    try:
+                        await bot.send_message(
+                            parent["telegram_id"], parent_text, parse_mode="HTML"
+                        )
+                    except Exception as e:
+                        logger.error(
+                            "Failed to send summary to parent %s: %s",
+                            parent["telegram_id"],
+                            e,
+                        )
+
+                # Calculate weekly points so far (excluding today)
+                weekly_points_so_far = 0
+                for i in range(today.weekday()):
+                    d = (week_start + timedelta(days=i)).isoformat()
+                    day_keys = await get_completed_keys_for_date(child["id"], d)
+                    weekly_points_so_far += calculate_daily_points(day_keys)
+
+                # Child evening summary
+                child_text = format_child_evening_summary(
+                    child["name"],
+                    today,
+                    completed_today,
+                    weekly_points_so_far,
+                    days_left,
+                )
+                await bot.send_message(
+                    child["telegram_id"], child_text, parse_mode="HTML"
+                )
+            except Exception as e:
+                logger.error(
+                    "Failed to send evening summary for child %s: %s",
+                    child["telegram_id"],
+                    e,
+                )
 
 
 async def weekly_report(bot: Bot) -> None:

@@ -16,6 +16,8 @@ from ..database import (
 from ..scoring import format_daily_summary, format_weekly_report
 from ..tasks_config import SUNDAY_TASK
 
+HISTORY_WEEKS = 4  # how many past weeks to show
+
 router = Router()
 
 
@@ -104,3 +106,45 @@ async def cmd_report(message: Message) -> None:
             child["name"], start, end, daily_completed, sunday_done
         )
         await message.answer(text, parse_mode="HTML")
+
+
+# ── /history ─────────────────────────────────────────────
+
+
+@router.message(Command("history"))
+async def cmd_history(message: Message) -> None:
+    user = await _require_parent(message)
+    if not user:
+        return
+
+    children = await get_family_children(user["family_id"])
+    if not children:
+        await message.answer("В семье пока нет детей.")
+        return
+
+    today = date.today()
+    current_week_start = today - timedelta(days=today.weekday())
+
+    for child in children:
+        parts = [f"📜 <b>История — {child['name']}</b>\n"]
+
+        for w in range(1, HISTORY_WEEKS + 1):
+            start = current_week_start - timedelta(weeks=w)
+            end = start + timedelta(days=6)
+
+            daily_completed = await get_completed_keys_for_range(
+                child["id"], start.isoformat(), end.isoformat()
+            )
+            for i in range(7):
+                d = (start + timedelta(days=i)).isoformat()
+                daily_completed.setdefault(d, set())
+
+            sunday_str = end.isoformat()
+            sunday_done = SUNDAY_TASK.key in daily_completed.get(sunday_str, set())
+
+            text = format_weekly_report(
+                child["name"], start, end, daily_completed, sunday_done
+            )
+            parts.append(text)
+
+        await message.answer("\n\n".join(parts), parse_mode="HTML")
