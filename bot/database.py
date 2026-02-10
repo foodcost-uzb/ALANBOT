@@ -48,6 +48,7 @@ async def init_db() -> None:
         CREATE TABLE IF NOT EXISTS families (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             invite_code TEXT UNIQUE NOT NULL,
+            parent_password TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
 
@@ -57,6 +58,17 @@ async def init_db() -> None:
             role TEXT NOT NULL CHECK (role IN ('parent', 'child')),
             family_id INTEGER REFERENCES families(id),
             name TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS extra_tasks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            family_id INTEGER NOT NULL REFERENCES families(id),
+            child_id INTEGER NOT NULL REFERENCES users(id),
+            title TEXT NOT NULL,
+            points INTEGER NOT NULL DEFAULT 1,
+            date TEXT NOT NULL,
+            completed INTEGER NOT NULL DEFAULT 0,
+            photo_file_id TEXT
         );
 
         CREATE TABLE IF NOT EXISTS completions (
@@ -211,3 +223,102 @@ async def get_all_families() -> list[dict]:
     db = await get_db()
     rows = await db.execute_fetchall("SELECT * FROM families")
     return [dict(r) for r in rows]
+
+
+# ── Family password ──────────────────────────────────────
+
+
+async def get_family_password(family_id: int) -> str | None:
+    db = await get_db()
+    rows = await db.execute_fetchall(
+        "SELECT parent_password FROM families WHERE id = ?", (family_id,)
+    )
+    if rows and rows[0]["parent_password"]:
+        return rows[0]["parent_password"]
+    return None
+
+
+async def set_family_password(family_id: int, password: str) -> None:
+    db = await get_db()
+    await db.execute(
+        "UPDATE families SET parent_password = ? WHERE id = ?",
+        (password, family_id),
+    )
+    await db.commit()
+
+
+# ── Extra tasks ──────────────────────────────────────────
+
+
+async def add_extra_task(
+    family_id: int, child_id: int, title: str, points: int, today: str
+) -> int:
+    db = await get_db()
+    cursor = await db.execute(
+        "INSERT INTO extra_tasks (family_id, child_id, title, points, date) VALUES (?, ?, ?, ?, ?)",
+        (family_id, child_id, title, points, today),
+    )
+    await db.commit()
+    return cursor.lastrowid
+
+
+async def get_extra_tasks_for_date(child_id: int, day: str) -> list[dict]:
+    db = await get_db()
+    rows = await db.execute_fetchall(
+        "SELECT * FROM extra_tasks WHERE child_id = ? AND date = ? ORDER BY id",
+        (child_id, day),
+    )
+    return [dict(r) for r in rows]
+
+
+async def get_extra_task(task_id: int) -> dict | None:
+    db = await get_db()
+    rows = await db.execute_fetchall(
+        "SELECT * FROM extra_tasks WHERE id = ?", (task_id,)
+    )
+    if rows:
+        return dict(rows[0])
+    return None
+
+
+async def complete_extra_task(task_id: int, photo_file_id: str) -> None:
+    db = await get_db()
+    await db.execute(
+        "UPDATE extra_tasks SET completed = 1, photo_file_id = ? WHERE id = ?",
+        (photo_file_id, task_id),
+    )
+    await db.commit()
+
+
+async def uncomplete_extra_task(task_id: int) -> None:
+    db = await get_db()
+    await db.execute(
+        "UPDATE extra_tasks SET completed = 0, photo_file_id = NULL WHERE id = ?",
+        (task_id,),
+    )
+    await db.commit()
+
+
+async def get_extra_points_for_range(
+    child_id: int, start: str, end: str
+) -> dict[str, int]:
+    """Return {date_str: total_extra_points} for completed extra tasks."""
+    db = await get_db()
+    rows = await db.execute_fetchall(
+        """SELECT date, SUM(points) as pts FROM extra_tasks
+           WHERE child_id = ? AND date BETWEEN ? AND ? AND completed = 1
+           GROUP BY date""",
+        (child_id, start, end),
+    )
+    return {r["date"]: r["pts"] for r in rows}
+
+
+async def get_extra_points_for_date(child_id: int, day: str) -> int:
+    db = await get_db()
+    rows = await db.execute_fetchall(
+        "SELECT SUM(points) as pts FROM extra_tasks WHERE child_id = ? AND date = ? AND completed = 1",
+        (child_id, day),
+    )
+    if rows and rows[0]["pts"]:
+        return rows[0]["pts"]
+    return 0

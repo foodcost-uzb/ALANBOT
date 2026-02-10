@@ -64,7 +64,10 @@ async def process_parent_password(message: Message, state: FSMContext) -> None:
         f"Команды:\n"
         f"/today — прогресс ребёнка за сегодня\n"
         f"/invite — показать инвайт-код\n"
-        f"/report — недельный отчёт",
+        f"/report — недельный отчёт\n"
+        f"/history — история за прошлые недели\n"
+        f"/extra — назначить доп. задание\n"
+        f"/password — сменить пароль",
         parse_mode="HTML",
     )
 
