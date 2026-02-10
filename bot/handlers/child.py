@@ -5,6 +5,7 @@ from datetime import date
 from aiogram import Bot, F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
 from ..database import (
@@ -18,6 +19,10 @@ from ..keyboards import checklist_kb
 from ..tasks_config import ALL_TASK_KEYS, DAILY_TASKS, SUNDAY_TASK
 
 router = Router()
+
+
+class PhotoSubmit(StatesGroup):
+    waiting_photo = State()
 
 
 def _is_sunday(d: date | None = None) -> bool:
@@ -80,7 +85,8 @@ async def noop_callback(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data.startswith("check:"))
-async def check_task_cb(callback: CallbackQuery) -> None:
+async def check_task_cb(callback: CallbackQuery, state: FSMContext) -> None:
+    """Child taps an uncompleted task — ask for photo confirmation."""
     await callback.answer()
     user = await _require_child(callback)
     if not user:
@@ -91,27 +97,51 @@ async def check_task_cb(callback: CallbackQuery) -> None:
         await callback.answer("Неизвестная задача.", show_alert=True)
         return
 
-    today = date.today()
-    today_str = today.isoformat()
-    await complete_task(user["id"], task_key, today_str)
-
-    completed = await get_completed_keys_for_date(user["id"], today_str)
-    await callback.message.edit_reply_markup(
-        reply_markup=checklist_kb(completed, is_sunday=_is_sunday(today)),
+    label = _task_label(task_key)
+    await state.set_state(PhotoSubmit.waiting_photo)
+    await state.update_data(task_key=task_key)
+    await callback.message.answer(
+        f"📸 Отправь фото для задачи: <b>{label}</b>",
+        parse_mode="HTML",
     )
 
-    # Notify parents
+
+@router.message(PhotoSubmit.waiting_photo, F.photo)
+async def receive_photo(message: Message, state: FSMContext) -> None:
+    user = await get_user(message.from_user.id)
+    data = await state.get_data()
+    task_key = data["task_key"]
     label = _task_label(task_key)
+
+    photo_file_id = message.photo[-1].file_id
+    today = date.today()
+    today_str = today.isoformat()
+
+    await complete_task(user["id"], task_key, today_str, photo_file_id)
+    await state.clear()
+
+    await message.answer(f"✅ Задача «{label}» выполнена!")
+
+    # Notify parents with photo
     parents = await get_family_parents(user["family_id"])
     for parent in parents:
         try:
-            await callback.bot.send_message(
+            await message.bot.send_photo(
                 parent["telegram_id"],
-                f"✅ {user['name']} выполнил(а): <b>{label}</b>",
+                photo=photo_file_id,
+                caption=f"✅ {user['name']} выполнил(а): <b>{label}</b>",
                 parse_mode="HTML",
             )
         except Exception:
             pass
+
+    # Refresh checklist
+    await send_checklist(message.bot, message.from_user.id)
+
+
+@router.message(PhotoSubmit.waiting_photo)
+async def waiting_photo_not_photo(message: Message) -> None:
+    await message.answer("📸 Пожалуйста, отправь именно фотографию.")
 
 
 @router.callback_query(F.data.startswith("done:"))

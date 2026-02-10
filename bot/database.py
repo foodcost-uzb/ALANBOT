@@ -64,6 +64,7 @@ async def init_db() -> None:
             child_id INTEGER NOT NULL REFERENCES users(id),
             task_key TEXT NOT NULL,
             date TEXT NOT NULL,
+            photo_file_id TEXT,
             completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(child_id, task_key, date)
         );
@@ -153,11 +154,13 @@ async def get_family_children(family_id: int) -> list[dict]:
 # ── Completions ───────────────────────────────────────────
 
 
-async def complete_task(child_id: int, task_key: str, today: str) -> None:
+async def complete_task(
+    child_id: int, task_key: str, today: str, photo_file_id: str | None = None
+) -> None:
     db = await get_db()
     await db.execute(
-        "INSERT OR IGNORE INTO completions (child_id, task_key, date) VALUES (?, ?, ?)",
-        (child_id, task_key, today),
+        "INSERT OR IGNORE INTO completions (child_id, task_key, date, photo_file_id) VALUES (?, ?, ?, ?)",
+        (child_id, task_key, today, photo_file_id),
     )
     await db.commit()
 
