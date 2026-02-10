@@ -1,0 +1,23 @@
+[Unit]
+Description=ALANBOT Telegram Daily Checklist Bot
+After=network.target
+
+[Service]
+Type=simple
+User=alanbot
+Group=alanbot
+WorkingDirectory=/opt/alanbot
+ExecStart=/opt/alanbot/venv/bin/python -m bot.main
+Restart=always
+RestartSec=5
+EnvironmentFile=/opt/alanbot/.env
+
+# Hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/alanbot/data
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
