@@ -4,6 +4,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
+from ..config import PARENT_PASSWORD
 from ..database import create_family, create_user, get_family_by_invite, get_user
 from ..keyboards import role_selection_kb
 
@@ -11,6 +12,7 @@ router = Router()
 
 
 class Registration(StatesGroup):
+    waiting_parent_password = State()
     waiting_invite_code = State()
     waiting_name = State()
 
@@ -40,11 +42,22 @@ async def role_parent(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.message.edit_text("Вы уже зарегистрированы.")
         return
 
-    family_id, invite_code = await create_family()
-    name = callback.from_user.full_name or "Родитель"
-    await create_user(callback.from_user.id, "parent", family_id, name)
+    await state.set_state(Registration.waiting_parent_password)
+    await callback.message.edit_text("🔒 Введите пароль для регистрации родителя:")
 
-    await callback.message.edit_text(
+
+@router.message(Registration.waiting_parent_password)
+async def process_parent_password(message: Message, state: FSMContext) -> None:
+    if message.text.strip() != PARENT_PASSWORD:
+        await message.answer("❌ Неверный пароль. Попробуйте ещё раз:")
+        return
+
+    family_id, invite_code = await create_family()
+    name = message.from_user.full_name or "Родитель"
+    await create_user(message.from_user.id, "parent", family_id, name)
+    await state.clear()
+
+    await message.answer(
         f"✅ Вы зарегистрированы как родитель!\n\n"
         f"Инвайт-код для ребёнка: <b>{invite_code}</b>\n"
         f"Отправьте этот код ребёнку, чтобы он привязался к вашей семье.\n\n"
