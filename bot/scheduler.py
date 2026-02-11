@@ -6,6 +6,11 @@ from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
+from .child_tasks import (
+    child_has_shower,
+    child_has_sunday_task,
+    get_active_daily_tasks,
+)
 from .config import (
     EVENING_HOUR,
     EVENING_MINUTE,
@@ -28,7 +33,7 @@ from .scoring import (
     format_daily_summary,
     format_weekly_report,
 )
-from .tasks_config import DAILY_TASKS, REMINDER_MESSAGES, SUNDAY_TASK
+from .tasks_config import REMINDER_MESSAGES, SUNDAY_TASK
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +110,8 @@ async def send_reminders(bot: Bot) -> None:
         for child in children:
             try:
                 completed = await get_completed_keys_for_date(child["id"], today_str)
-                all_daily_keys = {t.key for t in DAILY_TASKS}
+                daily_tasks = await get_active_daily_tasks(child["id"])
+                all_daily_keys = {t.key for t in daily_tasks}
                 remaining = all_daily_keys - completed
                 if not remaining:
                     continue
@@ -114,7 +120,7 @@ async def send_reminders(bot: Bot) -> None:
                 remaining_count = len(remaining)
                 text = (
                     f"{msg}\n\n"
-                    f"⬜ Осталось задач: <b>{remaining_count}</b> из {len(DAILY_TASKS)}"
+                    f"⬜ Осталось задач: <b>{remaining_count}</b> из {len(daily_tasks)}"
                 )
                 await bot.send_message(
                     child["telegram_id"], text, parse_mode="HTML"
@@ -149,10 +155,18 @@ async def evening_summary(bot: Bot) -> None:
                 completed_today = await get_completed_keys_for_date(
                     child["id"], today_str
                 )
+                daily_tasks = await get_active_daily_tasks(child["id"])
+                shower_req = await child_has_shower(child["id"])
+                has_sunday = await child_has_sunday_task(child["id"])
 
                 # Parent summary
                 parent_text = format_daily_summary(
-                    child["name"], today, completed_today, is_sunday
+                    child["name"],
+                    today,
+                    completed_today,
+                    is_sunday and has_sunday,
+                    daily_tasks=daily_tasks,
+                    shower_required=shower_req,
                 )
                 for parent in parents:
                     try:
@@ -171,7 +185,9 @@ async def evening_summary(bot: Bot) -> None:
                 for i in range(today.weekday()):
                     d = (week_start + timedelta(days=i)).isoformat()
                     day_keys = await get_completed_keys_for_date(child["id"], d)
-                    weekly_points_so_far += calculate_daily_points(day_keys)
+                    weekly_points_so_far += calculate_daily_points(
+                        day_keys, daily_tasks, shower_req
+                    )
 
                 # Child evening summary
                 child_text = format_child_evening_summary(
@@ -180,6 +196,8 @@ async def evening_summary(bot: Bot) -> None:
                     completed_today,
                     weekly_points_so_far,
                     days_left,
+                    daily_tasks=daily_tasks,
+                    shower_required=shower_req,
                 )
                 await bot.send_message(
                     child["telegram_id"], child_text, parse_mode="HTML"
@@ -212,10 +230,16 @@ async def weekly_report(bot: Bot) -> None:
                 daily_completed.setdefault(d, set())
 
             sunday_str = end.isoformat()
-            sunday_done = SUNDAY_TASK.key in daily_completed.get(sunday_str, set())
+            has_sunday = await child_has_sunday_task(child["id"])
+            sunday_done = has_sunday and SUNDAY_TASK.key in daily_completed.get(sunday_str, set())
+
+            daily_tasks = await get_active_daily_tasks(child["id"])
+            shower_req = await child_has_shower(child["id"])
 
             text = format_weekly_report(
-                child["name"], start, end, daily_completed, sunday_done
+                child["name"], start, end, daily_completed, sunday_done,
+                daily_tasks=daily_tasks,
+                shower_required=shower_req,
             )
             for parent in parents:
                 try:

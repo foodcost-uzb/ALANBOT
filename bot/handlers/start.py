@@ -5,8 +5,15 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
 from ..config import PARENT_PASSWORD
-from ..database import create_family, create_user, get_family_by_invite, get_user
-from ..keyboards import role_selection_kb
+from ..database import (
+    create_family,
+    create_user,
+    get_family_by_invite,
+    get_family_password,
+    get_user,
+    initialize_child_tasks,
+)
+from ..keyboards import parent_join_kb, role_selection_kb
 
 router = Router()
 
@@ -15,6 +22,9 @@ class Registration(StatesGroup):
     waiting_parent_password = State()
     waiting_invite_code = State()
     waiting_name = State()
+    # Second parent joining existing family
+    waiting_join_invite_code = State()
+    waiting_join_family_password = State()
 
 
 @router.message(CommandStart())
@@ -42,6 +52,20 @@ async def role_parent(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.message.edit_text("Вы уже зарегистрированы.")
         return
 
+    await callback.message.edit_text(
+        "Вы хотите создать новую семью или присоединиться к существующей?",
+        reply_markup=parent_join_kb(),
+    )
+
+
+@router.callback_query(F.data == "parent:new")
+async def parent_new_family(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    user = await get_user(callback.from_user.id)
+    if user:
+        await callback.message.edit_text("Вы уже зарегистрированы.")
+        return
+
     await state.set_state(Registration.waiting_parent_password)
     await callback.message.edit_text("🔒 Введите пароль для регистрации родителя:")
 
@@ -59,10 +83,12 @@ async def process_parent_password(message: Message, state: FSMContext) -> None:
 
     await message.answer(
         f"✅ Вы зарегистрированы как родитель!\n\n"
-        f"Инвайт-код для ребёнка: <b>{invite_code}</b>\n"
-        f"Отправьте этот код ребёнку, чтобы он привязался к вашей семье.\n\n"
+        f"Инвайт-код вашей семьи: <b>{invite_code}</b>\n"
+        f"Отправьте этот код ребёнку или второму родителю.\n\n"
         f"Команды:\n"
         f"/today — прогресс ребёнка за сегодня\n"
+        f"/children — список детей с прогрессом\n"
+        f"/tasks — настроить чеклист ребёнка\n"
         f"/invite — показать инвайт-код\n"
         f"/report — недельный отчёт\n"
         f"/history — история за прошлые недели\n"
@@ -70,6 +96,80 @@ async def process_parent_password(message: Message, state: FSMContext) -> None:
         f"/password — сменить пароль",
         parse_mode="HTML",
     )
+
+
+# ── Second parent: join existing family ──────────────────
+
+
+@router.callback_query(F.data == "parent:join")
+async def parent_join_family(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    user = await get_user(callback.from_user.id)
+    if user:
+        await callback.message.edit_text("Вы уже зарегистрированы.")
+        return
+
+    await state.set_state(Registration.waiting_join_invite_code)
+    await callback.message.edit_text(
+        "Введите инвайт-код семьи, к которой хотите присоединиться:"
+    )
+
+
+@router.message(Registration.waiting_join_invite_code)
+async def process_join_invite_code(message: Message, state: FSMContext) -> None:
+    code = message.text.strip()
+    family = await get_family_by_invite(code)
+    if not family:
+        await message.answer("❌ Неверный инвайт-код. Попробуйте ещё раз:")
+        return
+
+    await state.update_data(join_family_id=family["id"])
+
+    # Check if family has a password set
+    family_pwd = await get_family_password(family["id"])
+    if family_pwd:
+        await state.set_state(Registration.waiting_join_family_password)
+        await message.answer("🔒 Введите пароль семьи:")
+    else:
+        # No family password set — use global PARENT_PASSWORD
+        await state.set_state(Registration.waiting_join_family_password)
+        await message.answer("🔒 Введите пароль для регистрации родителя:")
+
+
+@router.message(Registration.waiting_join_family_password)
+async def process_join_family_password(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    family_id = data["join_family_id"]
+
+    password = message.text.strip()
+    family_pwd = await get_family_password(family_id)
+
+    # Validate against family password if set, otherwise against global PARENT_PASSWORD
+    expected = family_pwd if family_pwd else PARENT_PASSWORD
+    if password != expected:
+        await message.answer("❌ Неверный пароль. Попробуйте ещё раз:")
+        return
+
+    name = message.from_user.full_name or "Родитель"
+    await create_user(message.from_user.id, "parent", family_id, name)
+    await state.clear()
+
+    await message.answer(
+        f"✅ Вы присоединились к семье как родитель!\n\n"
+        f"Команды:\n"
+        f"/today — прогресс ребёнка за сегодня\n"
+        f"/children — список детей с прогрессом\n"
+        f"/tasks — настроить чеклист ребёнка\n"
+        f"/invite — показать инвайт-код\n"
+        f"/report — недельный отчёт\n"
+        f"/history — история за прошлые недели\n"
+        f"/extra — назначить доп. задание\n"
+        f"/password — сменить пароль",
+        parse_mode="HTML",
+    )
+
+
+# ── Child registration ───────────────────────────────────
 
 
 @router.callback_query(F.data == "role:child")
@@ -105,7 +205,8 @@ async def process_child_name(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     family_id = data["family_id"]
 
-    await create_user(message.from_user.id, "child", family_id, name)
+    user_id = await create_user(message.from_user.id, "child", family_id, name)
+    await initialize_child_tasks(user_id)
     await state.clear()
     await message.answer(
         f"✅ {name}, ты привязан к семье!\n\n"

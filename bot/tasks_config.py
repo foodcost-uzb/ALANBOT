@@ -44,6 +44,7 @@ GROUP_HEADERS = {
     "morning": "🌅 Утро",
     "evening": "🌙 Вечер",
     "sunday": "🧹 Воскресенье",
+    "custom": "📝 Свои задачи",
 }
 
 ALL_TASK_KEYS = {t.key for t in DAILY_TASKS} | {SUNDAY_TASK.key}

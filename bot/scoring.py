@@ -11,16 +11,20 @@ from .tasks_config import (
     SHOWER_KEY,
     SUNDAY_PENALTY,
     SUNDAY_TASK,
+    TaskDef,
 )
 
 
-def calculate_daily_points(completed_keys: set[str]) -> int:
-    """If shower not done, entire day = 0. Otherwise count completed daily tasks."""
-    if SHOWER_KEY not in completed_keys:
+def calculate_daily_points(
+    completed_keys: set[str],
+    daily_tasks: tuple[TaskDef, ...] | None = None,
+    shower_required: bool = True,
+) -> int:
+    """If shower not done (and required), entire day = 0. Otherwise count completed daily tasks."""
+    if shower_required and SHOWER_KEY not in completed_keys:
         return 0
-    return sum(
-        POINTS_PER_TASK for t in DAILY_TASKS if t.key in completed_keys
-    )
+    tasks = daily_tasks if daily_tasks is not None else DAILY_TASKS
+    return sum(POINTS_PER_TASK for t in tasks if t.key in completed_keys)
 
 
 def get_money_percentage(total_points: int) -> int:
@@ -45,6 +49,8 @@ def points_to_next_tier(total_points: int) -> tuple[int, int] | None:
 def calculate_weekly_result(
     daily_completed: dict[str, set[str]],
     sunday_done: bool,
+    daily_tasks: tuple[TaskDef, ...] | None = None,
+    shower_required: bool = True,
 ) -> dict:
     """
     daily_completed: {date_str: set of completed task keys} for 7 days.
@@ -53,7 +59,7 @@ def calculate_weekly_result(
     """
     daily_points: dict[str, int] = {}
     for day, keys in daily_completed.items():
-        daily_points[day] = calculate_daily_points(keys)
+        daily_points[day] = calculate_daily_points(keys, daily_tasks, shower_required)
 
     subtotal = sum(daily_points.values())
     penalty = SUNDAY_PENALTY if not sunday_done else 0
@@ -74,9 +80,13 @@ def format_daily_summary(
     day: date,
     completed_keys: set[str],
     is_sunday: bool,
+    daily_tasks: tuple[TaskDef, ...] | None = None,
+    sunday_task: TaskDef = SUNDAY_TASK,
+    shower_required: bool = True,
 ) -> str:
-    points = calculate_daily_points(completed_keys)
-    max_pts = len(DAILY_TASKS)
+    tasks = daily_tasks if daily_tasks is not None else DAILY_TASKS
+    points = calculate_daily_points(completed_keys, tasks, shower_required)
+    max_pts = len(tasks)
 
     lines = [
         f"📊 <b>Итоги дня ({day.strftime('%d.%m')})</b>",
@@ -84,15 +94,17 @@ def format_daily_summary(
         "",
     ]
 
-    for t in DAILY_TASKS:
+    for t in tasks:
+        if t.group == "sunday":
+            continue
         icon = "✅" if t.key in completed_keys else "❌"
         lines.append(f"{icon} {t.label}")
 
     if is_sunday:
-        icon = "✅" if SUNDAY_TASK.key in completed_keys else "❌"
-        lines.append(f"{icon} {SUNDAY_TASK.label}")
+        icon = "✅" if sunday_task.key in completed_keys else "❌"
+        lines.append(f"{icon} {sunday_task.label}")
 
-    if SHOWER_KEY not in completed_keys:
+    if shower_required and SHOWER_KEY not in completed_keys:
         lines.append("\n⚠️ Душ не принят — баллы за день: 0")
     else:
         lines.append(f"\nБаллы за день: {points}/{max_pts}")
@@ -106,17 +118,20 @@ def format_child_evening_summary(
     completed_keys: set[str],
     weekly_points_so_far: int,
     days_left: int,
+    daily_tasks: tuple[TaskDef, ...] | None = None,
+    shower_required: bool = True,
 ) -> str:
     """Evening message for the child with today's score and weekly progress."""
-    daily_pts = calculate_daily_points(completed_keys)
-    max_daily = len(DAILY_TASKS)
+    tasks = daily_tasks if daily_tasks is not None else DAILY_TASKS
+    daily_pts = calculate_daily_points(completed_keys, tasks, shower_required)
+    max_daily = len(tasks)
 
     lines = [
         f"🌙 <b>Итоги твоего дня ({day.strftime('%d.%m')})</b>",
         "",
     ]
 
-    if SHOWER_KEY not in completed_keys:
+    if shower_required and SHOWER_KEY not in completed_keys:
         lines.append("⚠️ Ты не принял душ — баллы за сегодня: 0")
     else:
         lines.append(f"Сегодня ты набрал: <b>{daily_pts}/{max_daily}</b> баллов")
@@ -153,9 +168,16 @@ def format_weekly_report(
     end: date,
     daily_completed: dict[str, set[str]],
     sunday_done: bool,
+    daily_tasks: tuple[TaskDef, ...] | None = None,
+    sunday_task: TaskDef = SUNDAY_TASK,
+    shower_required: bool = True,
 ) -> str:
-    result = calculate_weekly_result(daily_completed, sunday_done)
+    result = calculate_weekly_result(
+        daily_completed, sunday_done, daily_tasks, shower_required
+    )
     dp = result["daily_points"]
+    tasks = daily_tasks if daily_tasks is not None else DAILY_TASKS
+    max_pts = len(tasks)
 
     lines = [
         f"📊 <b>Отчёт за неделю ({start.strftime('%d.%m')} — {end.strftime('%d.%m')})</b>",
@@ -169,7 +191,6 @@ def format_weekly_report(
         d = date.fromisoformat(day_str)
         weekday_name = day_names[d.weekday()]
         pts = dp[day_str]
-        max_pts = len(DAILY_TASKS)
         lines.append(f"  {weekday_name} {d.strftime('%d.%m')}: {pts}/{max_pts}")
 
     lines.append("")

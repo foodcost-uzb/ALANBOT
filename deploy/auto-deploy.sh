@@ -90,14 +90,17 @@ if [ "$1" == "--env" ] || [ "$1" == "--all" ] || [ "$1" == "-a" ]; then
     echo ""
 fi
 
-# Перезапуск сервиса
+# Перезапуск сервисов
 echo "🔄 Перезапуск ALANBOT..."
 eval "$SSH_CMD $SERVER 'echo $SERVER_PASS | sudo -S systemctl restart alanbot 2>/dev/null'"
+eval "$SSH_CMD $SERVER 'echo $SERVER_PASS | sudo -S systemctl restart alanbot-web 2>/dev/null'"
 sleep 2
 
 # Проверка статуса
 echo "📊 Статус:"
 eval "$SSH_CMD $SERVER 'echo $SERVER_PASS | sudo -S systemctl is-active alanbot 2>/dev/null'" || true
+echo -n "Web: "
+eval "$SSH_CMD $SERVER 'echo $SERVER_PASS | sudo -S systemctl is-active alanbot-web 2>/dev/null'" || true
 echo ""
 
 echo "🎉 Деплой завершён!"

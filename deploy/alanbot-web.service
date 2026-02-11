@@ -1,0 +1,16 @@
+[Unit]
+Description=ALANBOT Mini App (Web API)
+After=network.target
+Wants=alanbot.service
+
+[Service]
+Type=simple
+User=myuser
+WorkingDirectory=/home/myuser/alanbot
+ExecStart=/home/myuser/alanbot/venv/bin/python -m webapp.server
+Restart=always
+RestartSec=5
+EnvironmentFile=/home/myuser/alanbot/.env
+
+[Install]
+WantedBy=multi-user.target
