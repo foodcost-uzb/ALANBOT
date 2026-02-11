@@ -3,7 +3,6 @@
  */
 const ParentExtrasView = (() => {
     async function render($el, user, childId) {
-        // If no childId, show child picker
         if (!childId) {
             const data = await API.get('/api/children');
             if (data.children.length === 1) {
@@ -19,9 +18,7 @@ const ParentExtrasView = (() => {
         const childName = child ? child.name : 'Ребёнок';
 
         let html = `
-            <div class="back-row">
-                <button class="back-btn" id="back-btn">← Назад</button>
-            </div>
+            <div class="back-row"><button class="back-btn" id="back-btn">\u2190 Назад</button></div>
             <div class="page-header">⭐ Доп. задание<div class="subtitle">${childName}</div></div>
             <div class="card">
                 <div class="form-group">
@@ -32,7 +29,7 @@ const ParentExtrasView = (() => {
                     <label>Бонусные баллы</label>
                     <input type="number" class="form-input" id="extra-points" value="1" min="1" max="10">
                 </div>
-                <button class="btn btn-primary mt-12" id="submit-extra">Назначить</button>
+                <button class="btn btn-primary mt-12" id="submit-extra">Назначить задание</button>
                 <div id="extra-result" class="mt-12 text-center"></div>
             </div>
         `;
@@ -56,20 +53,21 @@ const ParentExtrasView = (() => {
 
             try {
                 await API.post('/api/extras', { child_id: childId, title, points });
-                document.getElementById('extra-result').innerHTML = `<div style="color:var(--btn)">✅ Задание «${title}» (+${points} б.) назначено!</div>`;
+                haptic('success');
+                document.getElementById('extra-result').innerHTML = `<div class="text-success">✅ «${title}» (+${points} б.) назначено!</div>`;
                 document.getElementById('extra-title').value = '';
                 document.getElementById('extra-points').value = '1';
             } catch (err) {
                 document.getElementById('extra-result').innerHTML = `<div style="color:var(--destructive)">Ошибка: ${err.message}</div>`;
             }
             btn.disabled = false;
-            btn.textContent = 'Назначить';
+            btn.textContent = 'Назначить задание';
         });
     }
 
     function renderPicker($el, children) {
         let html = `
-            <div class="back-row"><button class="back-btn" id="back-btn">← Назад</button></div>
+            <div class="back-row"><button class="back-btn" id="back-btn">\u2190 Назад</button></div>
             <div class="page-header">⭐ Доп. задание<div class="subtitle">Выберите ребёнка</div></div>
         `;
         for (const child of children) {
@@ -85,8 +83,14 @@ const ParentExtrasView = (() => {
         });
     }
 
+    function haptic(style) {
+        if (window.Telegram?.WebApp?.HapticFeedback) {
+            window.Telegram.WebApp.HapticFeedback.notificationOccurred(style);
+        }
+    }
+
     function showAlert(text) {
-        if (window.Telegram && window.Telegram.WebApp) {
+        if (window.Telegram?.WebApp) {
             window.Telegram.WebApp.showAlert(text);
         } else {
             alert(text);

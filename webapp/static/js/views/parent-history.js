@@ -6,9 +6,7 @@ const ParentHistoryView = (() => {
         const data = await API.get(`/api/history/${childId}`);
 
         let html = `
-            <div class="back-row">
-                <button class="back-btn" id="back-btn">← Назад</button>
-            </div>
+            <div class="back-row"><button class="back-btn" id="back-btn">\u2190 Назад</button></div>
             <div class="page-header">📜 История — ${data.child_name}</div>
         `;
 
@@ -27,9 +25,9 @@ const ParentHistoryView = (() => {
 
             html += `
                 <div class="card">
-                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-                        <strong>${week.start_display} — ${week.end_display}</strong>
-                        <span class="money-badge ${moneyClass}" style="font-size:14px;padding:2px 8px">${week.money_percent}%</span>
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+                        <strong style="font-size:15px">${week.start_display} — ${week.end_display}</strong>
+                        <span class="money-badge ${moneyClass}" style="font-size:14px;padding:3px 10px">${week.money_percent}%</span>
                     </div>
                     <table class="report-table">
                         <tr><th>День</th><th>Баллы</th></tr>
@@ -38,9 +36,9 @@ const ParentHistoryView = (() => {
                 html += `<tr><td>${day.weekday} ${day.display}</td><td>${day.points}/${week.max_daily}</td></tr>`;
             }
             html += `
-                        <tr class="total-row"><td>Итого</td><td>${week.total}${week.extra_total ? ` + ${week.extra_total} доп.` : ''}</td></tr>
+                        <tr class="total-row"><td>Итого</td><td>${week.total}${week.extra_total ? ` + ${week.extra_total}` : ''}</td></tr>
                     </table>
-                    ${week.penalty ? `<div class="text-sm text-hint mt-8">Штраф: -${week.penalty}</div>` : ''}
+                    ${week.penalty ? `<div class="text-sm text-hint mt-8" style="color:var(--destructive)">Штраф: -${week.penalty}</div>` : ''}
                 </div>
             `;
         }

@@ -11,13 +11,25 @@ const ChecklistView = (() => {
 
     async function render($el, user) {
         const data = await API.get('/api/checklist');
-        $el.innerHTML = buildHTML(data);
-        attachEvents($el, user, data);
-    }
 
-    function buildHTML(data) {
-        let html = `<div class="page-header">📋 Чеклист<div class="subtitle">${formatDate(data.date)}</div></div>`;
-        html += '<div class="card">';
+        // Count stats
+        const total = data.tasks.length + data.extras.length;
+        const done = data.tasks.filter(t => t.status === 'done').length + data.extras.filter(e => e.status === 'done').length;
+        const pending = data.tasks.filter(t => t.status === 'pending').length + data.extras.filter(e => e.status === 'pending').length;
+        const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+
+        let html = `
+            <div class="page-header">
+                📋 Чеклист
+                <div class="subtitle">${formatDate(data.date)}</div>
+            </div>
+            <div class="card score-summary">
+                <div class="score-big">${done}<span style="font-size:20px;opacity:0.5">/${total}</span></div>
+                <div class="score-label">${pending > 0 ? `${pending} на проверке` : 'выполнено задач'}</div>
+                <div class="progress-bar mt-8"><div class="fill" style="width:${pct}%"></div></div>
+            </div>
+            <div class="card">
+        `;
 
         let currentGroup = null;
         for (const task of data.tasks) {
@@ -41,28 +53,32 @@ const ChecklistView = (() => {
         }
 
         html += '</div>';
-        return html;
+        $el.innerHTML = html;
+        attachEvents($el, user);
     }
 
     function taskItemHTML(task, type) {
         const icons = { todo: '⬜', pending: '🕐', done: '✅' };
         const icon = icons[task.status] || '⬜';
-        const doneClass = task.status === 'done' ? ' done' : '';
+        const statusClass = task.status === 'done' ? ' done' : (task.status === 'pending' ? ' pending' : '');
         const dataAttr = type === 'extra'
             ? `data-extra-id="${task.extraId}"`
             : `data-task-key="${task.key}"`;
 
         return `
-            <div class="task-item${doneClass}" ${dataAttr} data-status="${task.status}" data-type="${type}">
+            <div class="task-item${statusClass}" ${dataAttr} data-status="${task.status}" data-type="${type}">
                 <span class="task-icon">${icon}</span>
                 <span class="task-label">${task.label}</span>
             </div>
         `;
     }
 
-    function attachEvents($el, user, data) {
+    function attachEvents($el, user) {
         $el.querySelectorAll('.task-item').forEach(item => {
-            item.addEventListener('click', () => handleTaskClick(item, $el, user));
+            item.addEventListener('click', () => {
+                haptic('light');
+                handleTaskClick(item, $el, user);
+            });
         });
     }
 
@@ -76,7 +92,6 @@ const ChecklistView = (() => {
         }
 
         if (status === 'done') {
-            // Uncomplete
             if (type === 'extra') {
                 uncompleteExtra(item.dataset.extraId, $el, user);
             } else {
@@ -85,7 +100,6 @@ const ChecklistView = (() => {
             return;
         }
 
-        // Todo — open photo capture
         if (type === 'extra') {
             openPhotoCapture(item.querySelector('.task-label').textContent, null, item.dataset.extraId, $el, user);
         } else {
@@ -109,12 +123,17 @@ const ChecklistView = (() => {
         const cancelBtn = overlay.querySelector('#capture-cancel');
 
         captureBtn.addEventListener('click', () => input.click());
-        cancelBtn.addEventListener('click', () => overlay.remove());
+        cancelBtn.addEventListener('click', () => {
+            haptic('light');
+            overlay.remove();
+        });
 
         input.addEventListener('change', async () => {
             if (!input.files.length) return;
             const file = input.files[0];
-            overlay.innerHTML = '<div class="spinner"></div><p style="color:#fff;margin-top:12px">Загрузка...</p>';
+
+            haptic('medium');
+            overlay.innerHTML = '<div class="upload-indicator"><div class="spinner"></div><p>Загрузка...</p></div>';
 
             try {
                 const formData = new FormData();
@@ -126,10 +145,12 @@ const ChecklistView = (() => {
                     await API.post(`/api/checklist/${taskKey}/complete`, formData);
                 }
 
+                haptic('success');
                 overlay.remove();
                 await render($el, user);
             } catch (err) {
                 overlay.remove();
+                haptic('error');
                 showAlert('Ошибка: ' + err.message);
             }
         });
@@ -138,6 +159,7 @@ const ChecklistView = (() => {
     async function uncompleteTask(taskKey, $el, user) {
         try {
             await API.post(`/api/checklist/${taskKey}/uncomplete`);
+            haptic('light');
             await render($el, user);
         } catch (err) {
             showAlert('Ошибка: ' + err.message);
@@ -147,6 +169,7 @@ const ChecklistView = (() => {
     async function uncompleteExtra(extraId, $el, user) {
         try {
             await API.post(`/api/extras/${extraId}/uncomplete`);
+            haptic('light');
             await render($el, user);
         } catch (err) {
             showAlert('Ошибка: ' + err.message);
@@ -159,8 +182,18 @@ const ChecklistView = (() => {
         return `${days[d.getDay()]}, ${d.getDate()}.${String(d.getMonth() + 1).padStart(2, '0')}`;
     }
 
+    function haptic(style) {
+        if (window.Telegram?.WebApp?.HapticFeedback) {
+            if (style === 'success' || style === 'error') {
+                window.Telegram.WebApp.HapticFeedback.notificationOccurred(style);
+            } else {
+                window.Telegram.WebApp.HapticFeedback.impactOccurred(style);
+            }
+        }
+    }
+
     function showAlert(text) {
-        if (window.Telegram && window.Telegram.WebApp) {
+        if (window.Telegram?.WebApp) {
             window.Telegram.WebApp.showAlert(text);
         } else {
             alert(text);

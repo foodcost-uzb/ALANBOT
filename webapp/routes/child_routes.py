@@ -23,7 +23,7 @@ from webapp.db import (
     uncomplete_task,
     get_family_parents,
 )
-from webapp.notify import get_file_url, send_message
+from webapp.notify import get_file_url, send_media_to_parent
 
 routes = web.RouteTableDef()
 
@@ -138,12 +138,13 @@ async def complete_task_route(request: web.Request) -> web.Response:
             label = t["label"]
             break
 
-    # Notify parents
+    # Notify parents with photo + approval buttons (same as bot)
+    caption = f"\ud83d\udd50 {user['name']} \u0432\u044b\u043f\u043e\u043b\u043d\u0438\u043b(\u0430): <b>{label}</b>\n\u041e\u0436\u0438\u0434\u0430\u0435\u0442 \u043e\u0434\u043e\u0431\u0440\u0435\u043d\u0438\u044f"
     parents = await get_family_parents(user["family_id"])
     for parent in parents:
-        await send_message(
-            parent["telegram_id"],
-            f"🕐 {user['name']} выполнил(а): <b>{label}</b>\nОжидает одобрения в приложении",
+        await send_media_to_parent(
+            parent["telegram_id"], file_path, media_type,
+            caption, completion_id, is_extra=False,
         )
 
     return web.json_response({"ok": True, "completion_id": completion_id, "status": "pending"})
@@ -197,12 +198,13 @@ async def complete_extra_route(request: web.Request) -> web.Response:
 
     await complete_extra_task(extra_id, file_path, media_type)
 
-    # Notify parents
+    # Notify parents with photo + approval buttons (same as bot)
+    caption = f"\ud83d\udd50 {user['name']} \u0432\u044b\u043f\u043e\u043b\u043d\u0438\u043b(\u0430): <b>{et['title']}</b>\n\u041e\u0436\u0438\u0434\u0430\u0435\u0442 \u043e\u0434\u043e\u0431\u0440\u0435\u043d\u0438\u044f"
     parents = await get_family_parents(user["family_id"])
     for parent in parents:
-        await send_message(
-            parent["telegram_id"],
-            f"🕐 {user['name']} выполнил(а) доп.: <b>{et['title']}</b>\nОжидает одобрения",
+        await send_media_to_parent(
+            parent["telegram_id"], file_path, media_type,
+            caption, extra_id, is_extra=True,
         )
 
     return web.json_response({"ok": True, "status": "pending"})
