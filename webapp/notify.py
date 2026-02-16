@@ -147,6 +147,26 @@ async def send_media_to_parent(
         return await send_message(chat_id, caption)
 
 
+async def edit_message_caption(
+    chat_id: int, message_id: int, caption: str, parse_mode: str = "HTML"
+) -> bool:
+    """Edit caption of an existing message (removes inline keyboard)."""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{API_BASE}/editMessageCaption",
+                json={
+                    "chat_id": chat_id,
+                    "message_id": message_id,
+                    "caption": caption,
+                    "parse_mode": parse_mode,
+                },
+            ) as resp:
+                return resp.status == 200
+    except Exception:
+        return False
+
+
 async def get_file_url(file_id: str) -> str | None:
     """Get a download URL for a Telegram file_id."""
     try:

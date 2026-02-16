@@ -357,6 +357,24 @@ async def reset_child_tasks(child_id: int) -> None:
     await ensure_child_tasks_initialized(child_id)
 
 
+async def get_approval_messages(approval_type: str, approval_id: int) -> list[dict]:
+    db = await get_db()
+    rows = await db.execute_fetchall(
+        "SELECT chat_id, message_id FROM approval_messages WHERE approval_type = ? AND approval_id = ?",
+        (approval_type, approval_id),
+    )
+    return [dict(r) for r in rows]
+
+
+async def delete_approval_messages(approval_type: str, approval_id: int) -> None:
+    db = await get_db()
+    await db.execute(
+        "DELETE FROM approval_messages WHERE approval_type = ? AND approval_id = ?",
+        (approval_type, approval_id),
+    )
+    await db.commit()
+
+
 async def delete_family(family_id: int) -> list[int]:
     """Delete family and all related data. Returns telegram_ids of all members."""
     db = await get_db()

@@ -18,6 +18,7 @@ from ..database import (
     get_family_parents,
     get_pending_keys_for_date,
     get_user,
+    save_approval_message,
     uncomplete_extra_task,
     uncomplete_task,
 )
@@ -241,10 +242,11 @@ async def receive_media(message: Message, state: FSMContext) -> None:
     # Notify parents with media + approval buttons
     parents = await get_family_parents(user["family_id"])
     kb = approval_kb(completion_id, is_extra=is_extra)
+    approval_type = "extra" if is_extra else "task"
     for parent in parents:
         try:
             if media_type == "video":
-                await message.bot.send_video(
+                sent = await message.bot.send_video(
                     parent["telegram_id"],
                     video=file_id,
                     caption=f"🕐 {user['name']} выполнил(а): <b>{label}</b>\nОжидает одобрения",
@@ -252,13 +254,16 @@ async def receive_media(message: Message, state: FSMContext) -> None:
                     reply_markup=kb,
                 )
             else:
-                await message.bot.send_photo(
+                sent = await message.bot.send_photo(
                     parent["telegram_id"],
                     photo=file_id,
                     caption=f"🕐 {user['name']} выполнил(а): <b>{label}</b>\nОжидает одобрения",
                     parse_mode="HTML",
                     reply_markup=kb,
                 )
+            await save_approval_message(
+                approval_type, completion_id, parent["telegram_id"], sent.message_id
+            )
         except Exception:
             pass
 

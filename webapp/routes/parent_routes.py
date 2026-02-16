@@ -18,7 +18,9 @@ from webapp.db import (
     add_extra_task,
     approve_completion,
     approve_extra_task,
+    delete_approval_messages,
     delete_family,
+    get_approval_messages,
     get_child_all_tasks,
     get_child_enabled_tasks,
     get_completed_keys_for_date,
@@ -40,7 +42,7 @@ from webapp.db import (
     reset_child_tasks,
     toggle_child_task,
 )
-from webapp.notify import send_message
+from webapp.notify import edit_message_caption, send_message
 
 routes = web.RouteTableDef()
 
@@ -348,6 +350,17 @@ async def get_approvals(request: web.Request) -> web.Response:
     return web.json_response({"approvals": result})
 
 
+async def _update_all_approval_messages(approval_type: str, approval_id: int, new_caption: str) -> None:
+    """Edit approval messages for all parents in Telegram (remove buttons)."""
+    messages = await get_approval_messages(approval_type, approval_id)
+    for msg in messages:
+        try:
+            await edit_message_caption(msg["chat_id"], msg["message_id"], new_caption)
+        except Exception:
+            pass
+    await delete_approval_messages(approval_type, approval_id)
+
+
 @routes.post("/api/approvals/{id}/approve")
 async def approve_route(request: web.Request) -> web.Response:
     user = _require_parent(request)
@@ -362,28 +375,28 @@ async def approve_route(request: web.Request) -> web.Response:
             return web.json_response({"error": "Not found"}, status=404)
         await approve_extra_task(approval_id)
         child = await get_user_by_id(et["child_id"])
+        child_name = child["name"] if child else "Ребёнок"
+        new_caption = f"✅ Одобрено: {child_name} — <b>{et['title']}</b> (+{et['points']} б.)"
         if child:
-            await send_message(
-                child["telegram_id"],
-                f"✅ Доп. задание «{et['title']}» одобрено родителем! (+{et['points']} б.)",
-            )
+            await send_message(child["telegram_id"], f"✅ Доп. задание «{et['title']}» одобрено родителем! (+{et['points']} б.)")
+        await _update_all_approval_messages("extra", approval_id, new_caption)
     else:
         completion = await get_completion_by_id(approval_id)
         if not completion:
             return web.json_response({"error": "Not found"}, status=404)
         await approve_completion(approval_id)
         child = await get_user_by_id(completion["child_id"])
+        child_name = child["name"] if child else "Ребёнок"
+        enabled = await get_child_enabled_tasks(completion["child_id"])
+        label = completion["task_key"]
+        for t in enabled:
+            if t["task_key"] == completion["task_key"]:
+                label = t["label"]
+                break
+        new_caption = f"✅ Одобрено: {child_name} — <b>{label}</b>"
         if child:
-            enabled = await get_child_enabled_tasks(completion["child_id"])
-            label = completion["task_key"]
-            for t in enabled:
-                if t["task_key"] == completion["task_key"]:
-                    label = t["label"]
-                    break
-            await send_message(
-                child["telegram_id"],
-                f"✅ Задача «{label}» одобрена родителем!",
-            )
+            await send_message(child["telegram_id"], f"✅ Задача «{label}» одобрена родителем!")
+        await _update_all_approval_messages("task", approval_id, new_caption)
 
     return web.json_response({"ok": True})
 
@@ -402,16 +415,17 @@ async def reject_route(request: web.Request) -> web.Response:
             return web.json_response({"error": "Not found"}, status=404)
         await reject_extra_task(approval_id)
         child = await get_user_by_id(et["child_id"])
+        child_name = child["name"] if child else "Ребёнок"
+        new_caption = f"❌ Отклонено: {child_name} — <b>{et['title']}</b>"
         if child:
-            await send_message(
-                child["telegram_id"],
-                f"❌ Доп. задание «{et['title']}» отклонено. Попробуй снова!",
-            )
+            await send_message(child["telegram_id"], f"❌ Доп. задание «{et['title']}» отклонено. Попробуй снова!")
+        await _update_all_approval_messages("extra", approval_id, new_caption)
     else:
         completion = await get_completion_by_id(approval_id)
         if not completion:
             return web.json_response({"error": "Not found"}, status=404)
         child = await get_user_by_id(completion["child_id"])
+        child_name = child["name"] if child else "Ребёнок"
         label = completion["task_key"]
         if child:
             enabled = await get_child_enabled_tasks(completion["child_id"])
@@ -419,12 +433,11 @@ async def reject_route(request: web.Request) -> web.Response:
                 if t["task_key"] == completion["task_key"]:
                     label = t["label"]
                     break
+        new_caption = f"❌ Отклонено: {child_name} — <b>{label}</b>"
         await reject_completion(approval_id)
         if child:
-            await send_message(
-                child["telegram_id"],
-                f"❌ Задача «{label}» отклонена. Попробуй выполнить снова!",
-            )
+            await send_message(child["telegram_id"], f"❌ Задача «{label}» отклонена. Попробуй выполнить снова!")
+        await _update_all_approval_messages("task", approval_id, new_caption)
 
     return web.json_response({"ok": True})
 

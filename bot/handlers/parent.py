@@ -19,7 +19,9 @@ from ..database import (
     add_extra_task,
     approve_extra_task,
     approve_task,
+    delete_approval_messages,
     delete_family,
+    get_approval_messages,
     get_child_all_tasks,
     get_completed_keys_for_date,
     get_completed_keys_for_range,
@@ -83,6 +85,26 @@ async def _require_parent(message_or_cb) -> dict | None:
 async def _task_label_for_child(child_id: int, key: str) -> str:
     """Get task label, falling back to child_tasks DB."""
     return await get_task_label(child_id, key)
+
+
+async def _update_all_approval_messages(
+    bot, approval_type: str, approval_id: int, new_caption: str, skip_chat_id: int = 0
+) -> None:
+    """Edit approval messages for all parents (remove buttons, update caption)."""
+    messages = await get_approval_messages(approval_type, approval_id)
+    for msg in messages:
+        if msg["chat_id"] == skip_chat_id:
+            continue
+        try:
+            await bot.edit_message_caption(
+                chat_id=msg["chat_id"],
+                message_id=msg["message_id"],
+                caption=new_caption,
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
+    await delete_approval_messages(approval_type, approval_id)
 
 
 # ── /family ──────────────────────────────────────────────
@@ -685,9 +707,13 @@ async def approve_task_cb(callback: CallbackQuery) -> None:
     child = await get_user_by_id(completion["child_id"])
     child_name = child["name"] if child else "Ребёнок"
 
-    await callback.message.edit_caption(
-        caption=f"✅ Одобрено: {child_name} — <b>{label}</b>",
-        parse_mode="HTML",
+    new_caption = f"✅ Одобрено: {child_name} — <b>{label}</b>"
+    await callback.message.edit_caption(caption=new_caption, parse_mode="HTML")
+
+    # Update messages for other parents
+    await _update_all_approval_messages(
+        callback.bot, "task", completion_id, new_caption,
+        skip_chat_id=callback.message.chat.id,
     )
 
     # Notify child
@@ -697,7 +723,6 @@ async def approve_task_cb(callback: CallbackQuery) -> None:
                 child["telegram_id"],
                 f"✅ Задача «{label}» одобрена родителем!",
             )
-            # Refresh child's checklist
             from .child import send_checklist
             await send_checklist(callback.bot, child["telegram_id"])
         except Exception:
@@ -725,9 +750,13 @@ async def reject_task_cb(callback: CallbackQuery) -> None:
 
     await reject_task(completion_id)
 
-    await callback.message.edit_caption(
-        caption=f"❌ Отклонено: {child_name} — <b>{label}</b>",
-        parse_mode="HTML",
+    new_caption = f"❌ Отклонено: {child_name} — <b>{label}</b>"
+    await callback.message.edit_caption(caption=new_caption, parse_mode="HTML")
+
+    # Update messages for other parents
+    await _update_all_approval_messages(
+        callback.bot, "task", completion_id, new_caption,
+        skip_chat_id=callback.message.chat.id,
     )
 
     # Notify child
@@ -770,9 +799,13 @@ async def approve_extra_cb(callback: CallbackQuery) -> None:
     child = await get_user_by_id(et["child_id"])
     child_name = child["name"] if child else "Ребёнок"
 
-    await callback.message.edit_caption(
-        caption=f"✅ Одобрено: {child_name} — <b>{et['title']}</b> (+{et['points']} б.)",
-        parse_mode="HTML",
+    new_caption = f"✅ Одобрено: {child_name} — <b>{et['title']}</b> (+{et['points']} б.)"
+    await callback.message.edit_caption(caption=new_caption, parse_mode="HTML")
+
+    # Update messages for other parents
+    await _update_all_approval_messages(
+        callback.bot, "extra", extra_id, new_caption,
+        skip_chat_id=callback.message.chat.id,
     )
 
     if child:
@@ -807,9 +840,13 @@ async def reject_extra_cb(callback: CallbackQuery) -> None:
 
     await reject_extra_task(extra_id)
 
-    await callback.message.edit_caption(
-        caption=f"❌ Отклонено: {child_name} — <b>{et['title']}</b>",
-        parse_mode="HTML",
+    new_caption = f"❌ Отклонено: {child_name} — <b>{et['title']}</b>"
+    await callback.message.edit_caption(caption=new_caption, parse_mode="HTML")
+
+    # Update messages for other parents
+    await _update_all_approval_messages(
+        callback.bot, "extra", extra_id, new_caption,
+        skip_chat_id=callback.message.chat.id,
     )
 
     if child:

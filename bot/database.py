@@ -87,6 +87,14 @@ async def init_db() -> None:
             UNIQUE(child_id, task_key, date)
         );
 
+        CREATE TABLE IF NOT EXISTS approval_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            approval_type TEXT NOT NULL CHECK (approval_type IN ('task', 'extra')),
+            approval_id INTEGER NOT NULL,
+            chat_id INTEGER NOT NULL,
+            message_id INTEGER NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS child_tasks (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             child_id INTEGER NOT NULL REFERENCES users(id),
@@ -542,6 +550,35 @@ async def reset_child_tasks(child_id: int) -> None:
     await db.execute("DELETE FROM child_tasks WHERE child_id = ?", (child_id,))
     await db.commit()
     await initialize_child_tasks(child_id)
+
+
+async def save_approval_message(
+    approval_type: str, approval_id: int, chat_id: int, message_id: int
+) -> None:
+    db = await get_db()
+    await db.execute(
+        "INSERT INTO approval_messages (approval_type, approval_id, chat_id, message_id) VALUES (?, ?, ?, ?)",
+        (approval_type, approval_id, chat_id, message_id),
+    )
+    await db.commit()
+
+
+async def get_approval_messages(approval_type: str, approval_id: int) -> list[dict]:
+    db = await get_db()
+    rows = await db.execute_fetchall(
+        "SELECT chat_id, message_id FROM approval_messages WHERE approval_type = ? AND approval_id = ?",
+        (approval_type, approval_id),
+    )
+    return [dict(r) for r in rows]
+
+
+async def delete_approval_messages(approval_type: str, approval_id: int) -> None:
+    db = await get_db()
+    await db.execute(
+        "DELETE FROM approval_messages WHERE approval_type = ? AND approval_id = ?",
+        (approval_type, approval_id),
+    )
+    await db.commit()
 
 
 async def delete_family(family_id: int) -> list[int]:
