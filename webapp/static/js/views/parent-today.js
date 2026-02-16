@@ -53,11 +53,14 @@ const ParentTodayView = (() => {
             `;
         }
 
-        // Invite button
+        // Invite + Reset buttons
         html += `
             <div class="card text-center">
                 <button class="btn btn-outline btn-sm" id="show-invite">🔗 Показать инвайт-код</button>
                 <div id="invite-display"></div>
+            </div>
+            <div class="card text-center">
+                <button class="btn btn-outline btn-sm" id="reset-family-btn" style="color:var(--destructive);border-color:var(--destructive)">⚠️ Сбросить семью</button>
             </div>
         `;
 
@@ -86,6 +89,31 @@ const ParentTodayView = (() => {
             haptic('light');
             const inv = await API.get('/api/invite');
             document.getElementById('invite-display').innerHTML = `<div class="invite-code">${inv.invite_code}</div>`;
+        });
+
+        // Reset family
+        document.getElementById('reset-family-btn').addEventListener('click', () => {
+            haptic('warning');
+            const doReset = async () => {
+                await API.post('/api/family/reset');
+                haptic('success');
+                if (window.Telegram?.WebApp) {
+                    window.Telegram.WebApp.showAlert('Семья удалена. Все участники должны заново пройти /start.', () => {
+                        window.Telegram.WebApp.close();
+                    });
+                } else {
+                    alert('Семья удалена.');
+                    location.reload();
+                }
+            };
+            if (window.Telegram?.WebApp) {
+                window.Telegram.WebApp.showConfirm(
+                    'Удалить семью и все данные? Все участники должны будут заново зарегистрироваться.',
+                    (confirmed) => { if (confirmed) doReset(); }
+                );
+            } else {
+                if (confirm('Удалить семью и все данные?')) doReset();
+            }
         });
     }
 

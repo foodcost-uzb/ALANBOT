@@ -18,6 +18,7 @@ from webapp.db import (
     add_extra_task,
     approve_completion,
     approve_extra_task,
+    delete_family,
     get_child_all_tasks,
     get_child_enabled_tasks,
     get_completed_keys_for_date,
@@ -568,3 +569,27 @@ async def get_invite(request: web.Request) -> web.Response:
     user = _require_parent(request)
     code = await get_family_invite_code(user["family_id"])
     return web.json_response({"invite_code": code})
+
+
+# ── Reset family ───────────────────────────────────────
+
+
+@routes.post("/api/family/reset")
+async def reset_family(request: web.Request) -> web.Response:
+    user = _require_parent(request)
+    family_id = user["family_id"]
+    telegram_ids = await delete_family(family_id)
+
+    # Notify other family members via Telegram
+    for tg_id in telegram_ids:
+        if tg_id != user["telegram_id"]:
+            try:
+                await send_message(
+                    tg_id,
+                    "ℹ️ Семья была сброшена родителем.\n"
+                    "Для повторной регистрации нажмите /start.",
+                )
+            except Exception:
+                pass
+
+    return web.json_response({"ok": True})

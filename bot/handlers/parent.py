@@ -19,6 +19,7 @@ from ..database import (
     add_extra_task,
     approve_extra_task,
     approve_task,
+    delete_family,
     get_child_all_tasks,
     get_completed_keys_for_date,
     get_completed_keys_for_range,
@@ -549,6 +550,78 @@ async def process_new_password(message: Message, state: FSMContext) -> None:
         f"✅ Пароль изменён на: <b>{new_password}</b>",
         parse_mode="HTML",
     )
+
+
+# ── /reset_family — delete family and all data ──────────
+
+
+@router.message(Command("reset_family"))
+async def cmd_reset_family(message: Message) -> None:
+    user = await _require_parent(message)
+    if not user:
+        return
+
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="⚠️ Да, удалить всё",
+                    callback_data="reset_family_confirm",
+                ),
+                InlineKeyboardButton(
+                    text="Отмена",
+                    callback_data="reset_family_cancel",
+                ),
+            ]
+        ]
+    )
+    await message.answer(
+        "⚠️ <b>Вы уверены?</b>\n\n"
+        "Это удалит:\n"
+        "• Всех пользователей семьи (родителей и детей)\n"
+        "• Все выполненные задачи и чеклисты\n"
+        "• Все доп. задания\n"
+        "• Настройки задач\n\n"
+        "После этого все должны будут заново пройти /start.",
+        reply_markup=kb,
+        parse_mode="HTML",
+    )
+
+
+@router.callback_query(F.data == "reset_family_confirm")
+async def reset_family_confirm(callback: CallbackQuery) -> None:
+    await callback.answer()
+    user = await _require_parent(callback)
+    if not user:
+        return
+
+    family_id = user["family_id"]
+    telegram_ids = await delete_family(family_id)
+
+    await callback.message.edit_text(
+        "✅ Семья полностью удалена.\n"
+        "Все участники могут заново зарегистрироваться через /start."
+    )
+
+    # Notify other family members
+    for tg_id in telegram_ids:
+        if tg_id != callback.from_user.id:
+            try:
+                await callback.bot.send_message(
+                    tg_id,
+                    "ℹ️ Семья была сброшена родителем.\n"
+                    "Для повторной регистрации нажмите /start.",
+                )
+            except Exception:
+                pass
+
+
+@router.callback_query(F.data == "reset_family_cancel")
+async def reset_family_cancel(callback: CallbackQuery) -> None:
+    await callback.answer()
+    await callback.message.edit_text("Отменено. Данные не удалены.")
 
 
 # ── Approve / Reject regular tasks ──────────────────────

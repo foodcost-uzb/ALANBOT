@@ -542,3 +542,27 @@ async def reset_child_tasks(child_id: int) -> None:
     await db.execute("DELETE FROM child_tasks WHERE child_id = ?", (child_id,))
     await db.commit()
     await initialize_child_tasks(child_id)
+
+
+async def delete_family(family_id: int) -> list[int]:
+    """Delete family and all related data. Returns telegram_ids of all members."""
+    db = await get_db()
+    # Get all member telegram_ids before deleting
+    rows = await db.execute_fetchall(
+        "SELECT telegram_id FROM users WHERE family_id = ?", (family_id,)
+    )
+    telegram_ids = [r["telegram_id"] for r in rows]
+    # Get child user ids for child_tasks/completions cleanup
+    child_rows = await db.execute_fetchall(
+        "SELECT id FROM users WHERE family_id = ? AND role = 'child'", (family_id,)
+    )
+    child_ids = [r["id"] for r in child_rows]
+    # Delete in order: completions, extra_tasks, child_tasks, users, family
+    for cid in child_ids:
+        await db.execute("DELETE FROM completions WHERE child_id = ?", (cid,))
+        await db.execute("DELETE FROM child_tasks WHERE child_id = ?", (cid,))
+    await db.execute("DELETE FROM extra_tasks WHERE family_id = ?", (family_id,))
+    await db.execute("DELETE FROM users WHERE family_id = ?", (family_id,))
+    await db.execute("DELETE FROM families WHERE id = ?", (family_id,))
+    await db.commit()
+    return telegram_ids
