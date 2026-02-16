@@ -85,6 +85,39 @@ async def _task_label_for_child(child_id: int, key: str) -> str:
     return await get_task_label(child_id, key)
 
 
+# ── /family ──────────────────────────────────────────────
+
+
+@router.message(Command("family"))
+async def cmd_family(message: Message) -> None:
+    user = await _require_parent(message)
+    if not user:
+        return
+
+    from ..database import get_family_parents
+
+    parents = await get_family_parents(user["family_id"])
+    children = await get_family_children(user["family_id"])
+    code = await get_family_invite_code(user["family_id"])
+
+    lines = ["👨‍👩‍👧 <b>Ваша семья</b>\n"]
+
+    lines.append("👫 <b>Родители:</b>")
+    for p in parents:
+        lines.append(f"  • {p['name']}")
+
+    if children:
+        lines.append("\n🧒 <b>Дети:</b>")
+        for c in children:
+            lines.append(f"  • {c['name']}")
+    else:
+        lines.append("\n🧒 Дети: пока нет")
+
+    lines.append(f"\n🔗 Инвайт-код: <b>{code}</b>")
+
+    await message.answer("\n".join(lines), parse_mode="HTML")
+
+
 # ── /invite ──────────────────────────────────────────────
 
 

@@ -30,6 +30,7 @@ from webapp.db import (
     get_extra_tasks_for_date,
     get_family_children,
     get_family_invite_code,
+    get_family_parents,
     get_pending_approvals,
     get_pending_keys_for_date,
     get_user_by_id,
@@ -96,11 +97,13 @@ async def get_children(request: web.Request) -> web.Response:
             "pending": pend,
         })
 
-    # Also get pending approval count
+    # Also get pending approval count and parents list
     approvals = await get_pending_approvals(user["family_id"])
+    parents = await get_family_parents(user["family_id"])
 
     return web.json_response({
         "children": result,
+        "parents": [{"id": p["id"], "name": p["name"]} for p in parents],
         "pending_approvals": len(approvals),
     })
 

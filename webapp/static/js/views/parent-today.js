@@ -53,6 +53,17 @@ const ParentTodayView = (() => {
             `;
         }
 
+        // Parents list
+        if (data.parents && data.parents.length > 0) {
+            const parentNames = data.parents.map(p => p.name).join(', ');
+            html += `
+                <div class="card">
+                    <div class="section-header" style="margin:0 0 4px">👨‍👩‍👧 Родители</div>
+                    <div class="text-sm text-hint">${parentNames}</div>
+                </div>
+            `;
+        }
+
         // Invite + Reset buttons
         html += `
             <div class="card text-center">
