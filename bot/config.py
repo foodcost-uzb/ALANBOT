@@ -12,8 +12,7 @@ MORNING_MINUTE: int = int(os.getenv("MORNING_MINUTE", "0"))
 REMINDER_HOURS: list[int] = [
     int(h) for h in os.getenv("REMINDER_HOURS", "12,17").split(",")
 ]
-EVENING_HOUR: int = int(os.getenv("EVENING_HOUR", "21"))
-EVENING_MINUTE: int = int(os.getenv("EVENING_MINUTE", "0"))
+DEADLINE_HOUR: int = int(os.getenv("DEADLINE_HOUR", "22"))
 PARENT_PASSWORD: str = os.getenv("PARENT_PASSWORD", "1234")
 
 BASE_DIR = Path(__file__).resolve().parent.parent

@@ -139,14 +139,20 @@ const ChecklistView = (() => {
                 const formData = new FormData();
                 formData.append('file', file);
 
+                let result;
                 if (extraId) {
-                    await API.post(`/api/extras/${extraId}/complete`, formData);
+                    result = await API.post(`/api/extras/${extraId}/complete`, formData);
                 } else {
-                    await API.post(`/api/checklist/${taskKey}/complete`, formData);
+                    result = await API.post(`/api/checklist/${taskKey}/complete`, formData);
                 }
 
                 haptic('success');
                 overlay.remove();
+
+                if (result && result.late) {
+                    showAlert('⚠️ Задача сдана после 22:00');
+                }
+
                 await render($el, user);
             } catch (err) {
                 overlay.remove();
@@ -177,9 +183,10 @@ const ChecklistView = (() => {
     }
 
     function formatDate(isoDate) {
-        const d = new Date(isoDate + 'T00:00:00');
-        const days = ['Воскресенье', 'Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота'];
-        return `${days[d.getDay()]}, ${d.getDate()}.${String(d.getMonth() + 1).padStart(2, '0')}`;
+        const [year, month, day] = isoDate.split('-').map(Number);
+        const dayNames = ['Воскресенье', 'Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота'];
+        const d = new Date(year, month - 1, day);
+        return `${dayNames[d.getDay()]}, ${day}.${String(month).padStart(2, '0')}`;
     }
 
     function haptic(style) {

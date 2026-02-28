@@ -3,17 +3,18 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 import aiohttp
 from aiohttp import web
 
-from bot.tasks_config import SHOWER_KEY, TaskDef
+from bot.config import DEADLINE_HOUR, TIMEZONE
 from webapp.db import (
     complete_extra_task,
     complete_task,
     ensure_child_tasks_initialized,
+    get_child_all_tasks,
     get_child_enabled_tasks,
     get_completed_keys_for_date,
     get_extra_task,
@@ -28,6 +29,7 @@ from webapp.notify import get_file_url, send_media_to_parent
 routes = web.RouteTableDef()
 
 UPLOADS_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "uploads"
+MAX_UPLOAD_SIZE = 20 * 1024 * 1024  # 20 MB
 
 
 def _require_child(request: web.Request) -> dict:
@@ -39,6 +41,13 @@ def _require_child(request: web.Request) -> dict:
 
 def _is_sunday(d: date | None = None) -> bool:
     return (d or date.today()).weekday() == 6
+
+
+def _is_past_deadline() -> bool:
+    import zoneinfo
+    tz = zoneinfo.ZoneInfo(TIMEZONE)
+    now = datetime.now(tz)
+    return now.hour >= DEADLINE_HOUR
 
 
 @routes.get("/api/checklist")
@@ -95,15 +104,19 @@ async def complete_task_route(request: web.Request) -> web.Response:
     task_key = request.match_info["task_key"]
     today_str = date.today().isoformat()
 
-    # Validate task key belongs to child
-    tasks_rows = await get_child_enabled_tasks(user["id"])
-    valid_keys = {t["task_key"] for t in tasks_rows}
-    if task_key not in valid_keys:
+    # Validate task key belongs to child and is enabled
+    all_tasks = await get_child_all_tasks(user["id"])
+    task_entry = next((t for t in all_tasks if t["task_key"] == task_key), None)
+    if not task_entry:
         return web.json_response({"error": "Invalid task"}, status=400)
+    if not task_entry["enabled"]:
+        return web.json_response({"error": "Task is disabled"}, status=400)
+    tasks_rows = [t for t in all_tasks if t["enabled"]]
 
     # Handle multipart file upload
     reader = await request.multipart()
     file_path = None
+    full_path = None
     media_type = "photo"
 
     while True:
@@ -118,12 +131,25 @@ async def complete_task_route(request: web.Request) -> web.Response:
             day_dir.mkdir(parents=True, exist_ok=True)
             filename = f"{uuid.uuid4().hex}.{ext}"
             full_path = day_dir / filename
-            with open(full_path, "wb") as f:
-                while True:
-                    chunk = await part.read_chunk()
-                    if not chunk:
-                        break
-                    f.write(chunk)
+            try:
+                total_size = 0
+                with open(full_path, "wb") as f:
+                    while True:
+                        chunk = await part.read_chunk()
+                        if not chunk:
+                            break
+                        total_size += len(chunk)
+                        if total_size > MAX_UPLOAD_SIZE:
+                            break
+                        f.write(chunk)
+                if total_size > MAX_UPLOAD_SIZE:
+                    if full_path.exists():
+                        full_path.unlink()
+                    return web.json_response({"error": "File too large (max 20MB)"}, status=413)
+            except (IOError, OSError):
+                if full_path and full_path.exists():
+                    full_path.unlink()
+                return web.json_response({"error": "Failed to save file"}, status=500)
             file_path = f"uploads/{today_str}/{filename}"
 
     if not file_path:
@@ -138,8 +164,12 @@ async def complete_task_route(request: web.Request) -> web.Response:
             label = t["label"]
             break
 
+    # Check late submission
+    late = _is_past_deadline()
+    late_caption = "\n⚠️ Сдано после 22:00" if late else ""
+
     # Notify parents with photo + approval buttons (same as bot)
-    caption = f"\ud83d\udd50 {user['name']} \u0432\u044b\u043f\u043e\u043b\u043d\u0438\u043b(\u0430): <b>{label}</b>\n\u041e\u0436\u0438\u0434\u0430\u0435\u0442 \u043e\u0434\u043e\u0431\u0440\u0435\u043d\u0438\u044f"
+    caption = f"🕐 {user['name']} выполнил(а): <b>{label}</b>\nОжидает одобрения{late_caption}"
     parents = await get_family_parents(user["family_id"])
     for parent in parents:
         await send_media_to_parent(
@@ -147,7 +177,7 @@ async def complete_task_route(request: web.Request) -> web.Response:
             caption, completion_id, is_extra=False,
         )
 
-    return web.json_response({"ok": True, "completion_id": completion_id, "status": "pending"})
+    return web.json_response({"ok": True, "completion_id": completion_id, "status": "pending", "late": late})
 
 
 @routes.post("/api/checklist/{task_key}/uncomplete")
@@ -171,6 +201,7 @@ async def complete_extra_route(request: web.Request) -> web.Response:
 
     reader = await request.multipart()
     file_path = None
+    full_path = None
     media_type = "photo"
 
     while True:
@@ -185,12 +216,25 @@ async def complete_extra_route(request: web.Request) -> web.Response:
             day_dir.mkdir(parents=True, exist_ok=True)
             filename = f"{uuid.uuid4().hex}.{ext}"
             full_path = day_dir / filename
-            with open(full_path, "wb") as f:
-                while True:
-                    chunk = await part.read_chunk()
-                    if not chunk:
-                        break
-                    f.write(chunk)
+            try:
+                total_size = 0
+                with open(full_path, "wb") as f:
+                    while True:
+                        chunk = await part.read_chunk()
+                        if not chunk:
+                            break
+                        total_size += len(chunk)
+                        if total_size > MAX_UPLOAD_SIZE:
+                            break
+                        f.write(chunk)
+                if total_size > MAX_UPLOAD_SIZE:
+                    if full_path.exists():
+                        full_path.unlink()
+                    return web.json_response({"error": "File too large (max 20MB)"}, status=413)
+            except (IOError, OSError):
+                if full_path and full_path.exists():
+                    full_path.unlink()
+                return web.json_response({"error": "Failed to save file"}, status=500)
             file_path = f"uploads/{today_str}/{filename}"
 
     if not file_path:
@@ -198,8 +242,12 @@ async def complete_extra_route(request: web.Request) -> web.Response:
 
     await complete_extra_task(extra_id, file_path, media_type)
 
+    # Check late submission
+    late = _is_past_deadline()
+    late_caption = "\n⚠️ Сдано после 22:00" if late else ""
+
     # Notify parents with photo + approval buttons (same as bot)
-    caption = f"\ud83d\udd50 {user['name']} \u0432\u044b\u043f\u043e\u043b\u043d\u0438\u043b(\u0430): <b>{et['title']}</b>\n\u041e\u0436\u0438\u0434\u0430\u0435\u0442 \u043e\u0434\u043e\u0431\u0440\u0435\u043d\u0438\u044f"
+    caption = f"🕐 {user['name']} выполнил(а): <b>{et['title']}</b>\nОжидает одобрения{late_caption}"
     parents = await get_family_parents(user["family_id"])
     for parent in parents:
         await send_media_to_parent(
@@ -207,7 +255,7 @@ async def complete_extra_route(request: web.Request) -> web.Response:
             caption, extra_id, is_extra=True,
         )
 
-    return web.json_response({"ok": True, "status": "pending"})
+    return web.json_response({"ok": True, "status": "pending", "late": late})
 
 
 @routes.post("/api/extras/{extra_id}/uncomplete")

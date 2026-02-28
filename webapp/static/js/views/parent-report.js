@@ -10,6 +10,8 @@ const ParentReportView = (() => {
             : data.money_percent >= 40 ? 'orange'
             : 'red';
 
+        const hasExtra = data.extra_total > 0;
+
         let html = `
             <div class="back-row"><button class="back-btn" id="back-btn">\u2190 Назад</button></div>
             <div class="page-header">
@@ -22,21 +24,21 @@ const ParentReportView = (() => {
             </div>
             <div class="card">
                 <table class="report-table">
-                    <tr><th>День</th><th>Баллы</th>${data.extra_total ? '<th>Доп.</th>' : ''}</tr>
+                    <tr><th>День</th><th>Баллы</th>${hasExtra ? '<th>Доп.</th>' : ''}</tr>
         `;
 
         for (const day of data.days) {
-            html += `<tr><td>${day.weekday} ${day.display}</td><td>${day.points}/${data.max_daily}</td>${data.extra_total ? `<td>${day.extra || '—'}</td>` : ''}</tr>`;
+            html += `<tr><td>${day.weekday} ${day.display}</td><td>${day.points}/${data.max_daily}</td>${hasExtra ? `<td>${day.extra || '—'}</td>` : ''}</tr>`;
         }
 
         html += `
-                    <tr class="total-row"><td>Сумма</td><td>${data.subtotal}</td>${data.extra_total ? `<td>${data.extra_total}</td>` : ''}</tr>
+                    <tr class="total-row"><td>Сумма</td><td>${data.subtotal}</td>${hasExtra ? `<td>+${data.extra_total}</td>` : ''}</tr>
         `;
         if (data.penalty) {
-            html += `<tr><td colspan="${data.extra_total ? 3 : 2}" style="color:var(--destructive)">Штраф (уборка): -${data.penalty}</td></tr>`;
+            html += `<tr><td colspan="${hasExtra ? 3 : 2}" style="color:var(--destructive)">Штраф (уборка): -${data.penalty}</td></tr>`;
         }
         html += `
-                    <tr class="total-row"><td>Итого</td><td colspan="${data.extra_total ? 2 : 1}">${data.total}${data.extra_total ? ` + ${data.extra_total} доп.` : ''}</td></tr>
+                    <tr class="total-row"><td><b>Итого</b></td><td colspan="${hasExtra ? 2 : 1}"><b>${data.total}</b></td></tr>
                 </table>
             </div>
         `;

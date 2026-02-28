@@ -42,9 +42,11 @@ async def send_photo(
         data.add_field("chat_id", str(chat_id))
         data.add_field("caption", caption)
         data.add_field("parse_mode", parse_mode)
+        with open(local_file, "rb") as f:
+            file_data = f.read()
         data.add_field(
             "photo",
-            open(local_file, "rb"),
+            file_data,
             filename=local_file.name,
             content_type="image/jpeg",
         )
@@ -76,9 +78,11 @@ async def send_video(
         data.add_field("chat_id", str(chat_id))
         data.add_field("caption", caption)
         data.add_field("parse_mode", parse_mode)
+        with open(local_file, "rb") as f:
+            file_data = f.read()
         data.add_field(
             "video",
-            open(local_file, "rb"),
+            file_data,
             filename=local_file.name,
             content_type="video/mp4",
         )
@@ -100,9 +104,11 @@ async def send_media_to_parent(
     caption: str,
     completion_id: int,
     is_extra: bool = False,
-) -> bool:
+) -> int | None:
     """Send photo/video with approval buttons to a parent.
     Handles both Telegram file_ids and local upload paths.
+    Returns the Telegram message_id on success, None on failure.
+    Also saves the approval_message for cross-parent sync.
     """
     # Build inline keyboard for approval
     if is_extra:
@@ -114,37 +120,93 @@ async def send_media_to_parent(
 
     reply_markup = {
         "inline_keyboard": [[
-            {"text": "\u2705 \u041e\u0434\u043e\u0431\u0440\u0438\u0442\u044c", "callback_data": approve_cb},
-            {"text": "\u274c \u041e\u0442\u043a\u043b\u043e\u043d\u0438\u0442\u044c", "callback_data": reject_cb},
+            {"text": "✅ Одобрить", "callback_data": approve_cb},
+            {"text": "❌ Отклонить", "callback_data": reject_cb},
         ]]
     }
+
+    message_id = None
 
     # Local upload path
     if file_id_or_path.startswith("uploads/"):
         if media_type == "video":
-            return await send_video(chat_id, file_id_or_path, caption, reply_markup=reply_markup)
-        return await send_photo(chat_id, file_id_or_path, caption, reply_markup=reply_markup)
+            message_id = await _send_media_get_id(chat_id, file_id_or_path, "video", caption, reply_markup)
+        else:
+            message_id = await _send_media_get_id(chat_id, file_id_or_path, "photo", caption, reply_markup)
+    else:
+        # Telegram file_id — send directly via API
+        try:
+            async with aiohttp.ClientSession() as session:
+                payload = {
+                    "chat_id": chat_id,
+                    "caption": caption,
+                    "parse_mode": "HTML",
+                    "reply_markup": reply_markup,
+                }
+                if media_type == "video":
+                    payload["video"] = file_id_or_path
+                    url = f"{API_BASE}/sendVideo"
+                else:
+                    payload["photo"] = file_id_or_path
+                    url = f"{API_BASE}/sendPhoto"
 
-    # Telegram file_id — send directly via API
+                async with session.post(url, json=payload) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        message_id = data.get("result", {}).get("message_id")
+        except Exception:
+            await send_message(chat_id, caption)
+
+    # Save approval message for cross-parent sync
+    if message_id:
+        from webapp.db import get_db
+        approval_type = "extra" if is_extra else "task"
+        db = await get_db()
+        await db.execute(
+            "INSERT INTO approval_messages (approval_type, approval_id, chat_id, message_id) VALUES (?, ?, ?, ?)",
+            (approval_type, completion_id, chat_id, message_id),
+        )
+        await db.commit()
+
+    return message_id
+
+
+async def _send_media_get_id(
+    chat_id: int, file_path: str, media_key: str, caption: str, reply_markup: dict
+) -> int | None:
+    """Send local media file and return Telegram message_id."""
+    local_file = DATA_DIR / file_path
+    if not local_file.exists():
+        await send_message(chat_id, caption)
+        return None
+
+    import json as json_mod
+    data = aiohttp.FormData()
+    data.add_field("chat_id", str(chat_id))
+    data.add_field("caption", caption)
+    data.add_field("parse_mode", "HTML")
+    data.add_field("reply_markup", json_mod.dumps(reply_markup))
+
+    content_type = "video/mp4" if media_key == "video" else "image/jpeg"
+    with open(local_file, "rb") as f:
+        file_data = f.read()
+    data.add_field(
+        media_key,
+        file_data,
+        filename=local_file.name,
+        content_type=content_type,
+    )
+
+    endpoint = "sendVideo" if media_key == "video" else "sendPhoto"
     try:
         async with aiohttp.ClientSession() as session:
-            payload = {
-                "chat_id": chat_id,
-                "caption": caption,
-                "parse_mode": "HTML",
-                "reply_markup": reply_markup,
-            }
-            if media_type == "video":
-                payload["video"] = file_id_or_path
-                url = f"{API_BASE}/sendVideo"
-            else:
-                payload["photo"] = file_id_or_path
-                url = f"{API_BASE}/sendPhoto"
-
-            async with session.post(url, json=payload) as resp:
-                return resp.status == 200
+            async with session.post(f"{API_BASE}/{endpoint}", data=data) as resp:
+                if resp.status == 200:
+                    result = await resp.json()
+                    return result.get("result", {}).get("message_id")
     except Exception:
-        return await send_message(chat_id, caption)
+        await send_message(chat_id, caption)
+    return None
 
 
 async def edit_message_caption(
@@ -165,6 +227,17 @@ async def edit_message_caption(
                 return resp.status == 200
     except Exception:
         return False
+
+
+async def send_checklist_to_child(telegram_id: int) -> bool:
+    """Trigger checklist send to a child via the bot's sendMessage.
+
+    This is a lightweight notification — the child can also press /checklist.
+    """
+    return await send_message(
+        telegram_id,
+        "📋 Чеклист обновлён — нажми /checklist чтобы увидеть изменения.",
+    )
 
 
 async def get_file_url(file_id: str) -> str | None:

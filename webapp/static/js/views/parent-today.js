@@ -131,17 +131,19 @@ const ParentTodayView = (() => {
     async function renderChild($el, user, childId) {
         const data = await API.get(`/api/today/${childId}`);
 
-        const scoreText = data.shower_missing ? '0' : `${data.points}`;
+        const baseText = data.shower_missing ? '0' : `${data.base_points}`;
         const maxText = data.max_points;
+        const totalText = data.shower_missing ? '0' : `${data.points}`;
+        const hasExtra = data.extra_points > 0;
 
         let html = `
             <div class="back-row"><button class="back-btn" id="back-btn">\u2190 Назад</button></div>
             <div class="page-header">${data.child_name}<div class="subtitle">${formatDate(data.date)}</div></div>
             <div class="card score-summary">
-                <div class="score-big">${scoreText}<span style="font-size:20px;opacity:0.5">/${maxText}</span></div>
+                <div class="score-big">${hasExtra ? totalText : baseText}<span style="font-size:20px;opacity:0.5">/${maxText}</span></div>
                 <div class="score-label">баллов за сегодня</div>
                 ${data.shower_missing ? '<div class="text-sm mt-8" style="color:var(--destructive)">Душ не принят — баллы за день: 0</div>' : ''}
-                ${data.extra_points ? `<div class="text-sm mt-8">⭐ Доп. задания: +${data.extra_points}</div>` : ''}
+                ${hasExtra ? `<div class="text-sm mt-8">Задачи: ${baseText} + ⭐ Доп.: +${data.extra_points} = <b>${totalText}</b></div>` : ''}
             </div>
             <div class="card">
         `;
@@ -174,13 +176,17 @@ const ParentTodayView = (() => {
     }
 
     function formatDate(isoDate) {
-        const d = new Date(isoDate + 'T00:00:00');
-        return `${d.getDate()}.${String(d.getMonth() + 1).padStart(2, '0')}`;
+        const [, month, day] = isoDate.split('-').map(Number);
+        return `${day}.${String(month).padStart(2, '0')}`;
     }
 
     function haptic(style) {
         if (window.Telegram?.WebApp?.HapticFeedback) {
-            window.Telegram.WebApp.HapticFeedback.impactOccurred(style);
+            if (['success', 'warning', 'error'].includes(style)) {
+                window.Telegram.WebApp.HapticFeedback.notificationOccurred(style);
+            } else {
+                window.Telegram.WebApp.HapticFeedback.impactOccurred(style);
+            }
         }
     }
 

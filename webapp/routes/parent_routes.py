@@ -12,7 +12,7 @@ from bot.scoring import (
     get_money_percentage,
     points_to_next_tier,
 )
-from bot.tasks_config import SHOWER_KEY, SUNDAY_TASK, TaskDef, GROUP_HEADERS
+from bot.tasks_config import SHOWER_KEY, SUNDAY_TASK, TaskDef
 from webapp.db import (
     add_custom_child_task,
     add_extra_task,
@@ -42,7 +42,7 @@ from webapp.db import (
     reset_child_tasks,
     toggle_child_task,
 )
-from webapp.notify import edit_message_caption, send_message
+from webapp.notify import edit_message_caption, send_checklist_to_child, send_message
 
 routes = web.RouteTableDef()
 
@@ -137,7 +137,8 @@ async def get_today(request: web.Request) -> web.Response:
     daily_tasks = _tasks_to_taskdefs(enabled, exclude_sunday=True)
     shower_req = _child_has_shower(enabled)
 
-    points = calculate_daily_points(completed, daily_tasks, shower_req)
+    base_points = calculate_daily_points(completed, daily_tasks, shower_req)
+    total_points = base_points + extra_pts
 
     tasks = []
     for t in enabled:
@@ -174,7 +175,8 @@ async def get_today(request: web.Request) -> web.Response:
         "is_sunday": is_sunday,
         "tasks": tasks,
         "extras": extra_list,
-        "points": points,
+        "base_points": base_points,
+        "points": total_points,
         "max_points": len(daily_tasks),
         "extra_points": extra_pts,
         "shower_missing": shower_missing,
@@ -211,10 +213,14 @@ async def get_report(request: web.Request) -> web.Response:
     sunday_str = end.isoformat()
     sunday_done = has_sunday and SUNDAY_TASK.key in daily_completed.get(sunday_str, set())
 
-    result = calculate_weekly_result(daily_completed, sunday_done, daily_tasks, shower_req)
-
     extra_pts = await get_extra_points_for_range(child_id, start.isoformat(), end.isoformat())
-    total_extra = sum(extra_pts.values())
+    max_weekly = len(daily_tasks) * 7
+
+    result = calculate_weekly_result(
+        daily_completed, sunday_done, daily_tasks, shower_req,
+        extra_points_per_day=extra_pts,
+        max_weekly_points=max_weekly,
+    )
 
     day_names = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
     days = []
@@ -237,7 +243,7 @@ async def get_report(request: web.Request) -> web.Response:
         "subtotal": result["subtotal"],
         "penalty": result["penalty"],
         "total": result["total"],
-        "extra_total": total_extra,
+        "extra_total": result["extra_total"],
         "money_percent": result["money_percent"],
         "max_daily": len(daily_tasks),
     })
@@ -277,9 +283,14 @@ async def get_history(request: web.Request) -> web.Response:
         sunday_str = end.isoformat()
         sunday_done = has_sunday and SUNDAY_TASK.key in daily_completed.get(sunday_str, set())
 
-        result = calculate_weekly_result(daily_completed, sunday_done, daily_tasks, shower_req)
         extra_pts = await get_extra_points_for_range(child_id, start.isoformat(), end.isoformat())
-        total_extra = sum(extra_pts.values())
+        max_weekly = len(daily_tasks) * 7
+
+        result = calculate_weekly_result(
+            daily_completed, sunday_done, daily_tasks, shower_req,
+            extra_points_per_day=extra_pts,
+            max_weekly_points=max_weekly,
+        )
 
         day_names = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
         days = []
@@ -290,6 +301,7 @@ async def get_history(request: web.Request) -> web.Response:
                 "weekday": day_names[d.weekday()],
                 "display": d.strftime("%d.%m"),
                 "points": result["daily_points"][day_str],
+                "extra": extra_pts.get(day_str, 0),
             })
 
         weeks.append({
@@ -301,7 +313,7 @@ async def get_history(request: web.Request) -> web.Response:
             "subtotal": result["subtotal"],
             "penalty": result["penalty"],
             "total": result["total"],
-            "extra_total": total_extra,
+            "extra_total": result["extra_total"],
             "money_percent": result["money_percent"],
             "max_daily": len(daily_tasks),
         })
@@ -373,20 +385,29 @@ async def approve_route(request: web.Request) -> web.Response:
         et = await get_extra_task(approval_id)
         if not et:
             return web.json_response({"error": "Not found"}, status=404)
+        if et["family_id"] != user["family_id"]:
+            return web.json_response({"error": "Forbidden"}, status=403)
+        if et.get("approved"):
+            return web.json_response({"error": "Already approved"}, status=400)
         await approve_extra_task(approval_id)
         child = await get_user_by_id(et["child_id"])
         child_name = child["name"] if child else "Ребёнок"
         new_caption = f"✅ Одобрено: {child_name} — <b>{et['title']}</b> (+{et['points']} б.)"
         if child:
             await send_message(child["telegram_id"], f"✅ Доп. задание «{et['title']}» одобрено родителем! (+{et['points']} б.)")
+            await send_checklist_to_child(child["telegram_id"])
         await _update_all_approval_messages("extra", approval_id, new_caption)
     else:
         completion = await get_completion_by_id(approval_id)
         if not completion:
             return web.json_response({"error": "Not found"}, status=404)
-        await approve_completion(approval_id)
+        if completion["approved"]:
+            return web.json_response({"error": "Already approved"}, status=400)
         child = await get_user_by_id(completion["child_id"])
-        child_name = child["name"] if child else "Ребёнок"
+        if not child or child["family_id"] != user["family_id"]:
+            return web.json_response({"error": "Forbidden"}, status=403)
+        await approve_completion(approval_id)
+        child_name = child["name"]
         enabled = await get_child_enabled_tasks(completion["child_id"])
         label = completion["task_key"]
         for t in enabled:
@@ -394,8 +415,8 @@ async def approve_route(request: web.Request) -> web.Response:
                 label = t["label"]
                 break
         new_caption = f"✅ Одобрено: {child_name} — <b>{label}</b>"
-        if child:
-            await send_message(child["telegram_id"], f"✅ Задача «{label}» одобрена родителем!")
+        await send_message(child["telegram_id"], f"✅ Задача «{label}» одобрена родителем!")
+        await send_checklist_to_child(child["telegram_id"])
         await _update_all_approval_messages("task", approval_id, new_caption)
 
     return web.json_response({"ok": True})
@@ -413,31 +434,35 @@ async def reject_route(request: web.Request) -> web.Response:
         et = await get_extra_task(approval_id)
         if not et:
             return web.json_response({"error": "Not found"}, status=404)
-        await reject_extra_task(approval_id)
+        if et["family_id"] != user["family_id"]:
+            return web.json_response({"error": "Forbidden"}, status=403)
         child = await get_user_by_id(et["child_id"])
         child_name = child["name"] if child else "Ребёнок"
         new_caption = f"❌ Отклонено: {child_name} — <b>{et['title']}</b>"
+        await _update_all_approval_messages("extra", approval_id, new_caption)
+        await reject_extra_task(approval_id)
         if child:
             await send_message(child["telegram_id"], f"❌ Доп. задание «{et['title']}» отклонено. Попробуй снова!")
-        await _update_all_approval_messages("extra", approval_id, new_caption)
+            await send_checklist_to_child(child["telegram_id"])
     else:
         completion = await get_completion_by_id(approval_id)
         if not completion:
             return web.json_response({"error": "Not found"}, status=404)
         child = await get_user_by_id(completion["child_id"])
-        child_name = child["name"] if child else "Ребёнок"
+        if not child or child["family_id"] != user["family_id"]:
+            return web.json_response({"error": "Forbidden"}, status=403)
+        child_name = child["name"]
         label = completion["task_key"]
-        if child:
-            enabled = await get_child_enabled_tasks(completion["child_id"])
-            for t in enabled:
-                if t["task_key"] == completion["task_key"]:
-                    label = t["label"]
-                    break
+        enabled = await get_child_enabled_tasks(completion["child_id"])
+        for t in enabled:
+            if t["task_key"] == completion["task_key"]:
+                label = t["label"]
+                break
         new_caption = f"❌ Отклонено: {child_name} — <b>{label}</b>"
-        await reject_completion(approval_id)
-        if child:
-            await send_message(child["telegram_id"], f"❌ Задача «{label}» отклонена. Попробуй выполнить снова!")
         await _update_all_approval_messages("task", approval_id, new_caption)
+        await reject_completion(approval_id)
+        await send_message(child["telegram_id"], f"❌ Задача «{label}» отклонена. Попробуй выполнить снова!")
+        await send_checklist_to_child(child["telegram_id"])
 
     return web.json_response({"ok": True})
 
@@ -463,7 +488,7 @@ async def create_extra(request: web.Request) -> web.Response:
         return web.json_response({"error": "Child not found"}, status=404)
 
     try:
-        points = max(1, int(points))
+        points = max(1, min(50, int(points)))
     except (ValueError, TypeError):
         points = 1
 

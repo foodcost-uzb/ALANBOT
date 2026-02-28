@@ -30,7 +30,7 @@ SHOWER_KEY = "shower"
 POINTS_PER_TASK = 1
 SUNDAY_PENALTY = 5
 
-# Weekly money tiers: (min_points, max_points, percentage)
+# Weekly money tiers: (min_points, max_points, percentage) — legacy fixed tiers
 MONEY_TIERS: tuple[tuple[int, int, int], ...] = (
     (50, 56, 100),
     (42, 49, 70),
@@ -39,6 +39,15 @@ MONEY_TIERS: tuple[tuple[int, int, int], ...] = (
 )
 
 MAX_WEEKLY_POINTS = 56  # 8 tasks * 7 days
+
+# Adaptive tier thresholds: (fraction_of_max, money_percentage)
+# Tiers adapt to the number of enabled tasks per child
+# Fractions chosen so that ceil(56 * fraction) reproduces original fixed tiers
+TIER_THRESHOLDS: tuple[tuple[float, int], ...] = (
+    (0.892, 100),   # ≥89.2% → 100% money (50/56 for 8 tasks)
+    (0.75,   70),   # ≥75%   → 70%  money (42/56 for 8 tasks)
+    (0.625,  40),   # ≥62.5% → 40%  money (35/56 for 8 tasks)
+)
 
 GROUP_HEADERS = {
     "morning": "🌅 Утро",

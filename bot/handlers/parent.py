@@ -6,7 +6,7 @@ from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from ..child_tasks import (
     child_has_shower,
@@ -31,6 +31,7 @@ from ..database import (
     get_extra_task,
     get_family_children,
     get_family_invite_code,
+    get_family_parents,
     get_user,
     get_user_by_id,
     reject_extra_task,
@@ -115,8 +116,6 @@ async def cmd_family(message: Message) -> None:
     user = await _require_parent(message)
     if not user:
         return
-
-    from ..database import get_family_parents
 
     parents = await get_family_parents(user["family_id"])
     children = await get_family_children(user["family_id"])
@@ -208,19 +207,16 @@ async def cmd_today(message: Message) -> None:
         daily_tasks = await get_active_daily_tasks(child["id"])
         shower_req = await child_has_shower(child["id"])
         has_sunday = await child_has_sunday_task(child["id"])
-        sunday_task = SUNDAY_TASK if has_sunday else None
-
         text = format_daily_summary(
             child["name"],
             today,
             completed,
             is_sunday and has_sunday,
             daily_tasks=daily_tasks,
-            sunday_task=sunday_task or SUNDAY_TASK,
+            sunday_task=SUNDAY_TASK if has_sunday else None,
             shower_required=shower_req,
+            extra_points=extra_pts,
         )
-        if extra_pts:
-            text += f"\n⭐ Доп. задания: +{extra_pts} б."
         await message.answer(text, parse_mode="HTML")
 
 
@@ -257,18 +253,18 @@ async def cmd_report(message: Message) -> None:
         extra_pts = await get_extra_points_for_range(
             child["id"], start.isoformat(), end.isoformat()
         )
-        total_extra = sum(extra_pts.values())
 
         daily_tasks = await get_active_daily_tasks(child["id"])
         shower_req = await child_has_shower(child["id"])
+        max_weekly = len(daily_tasks) * 7
 
         text = format_weekly_report(
             child["name"], start, end, daily_completed, sunday_done,
             daily_tasks=daily_tasks,
             shower_required=shower_req,
+            extra_points_per_day=extra_pts,
+            max_weekly_points=max_weekly,
         )
-        if total_extra:
-            text += f"\n⭐ Доп. задания за неделю: +{total_extra} б."
         await message.answer(text, parse_mode="HTML")
 
 
@@ -309,10 +305,17 @@ async def cmd_history(message: Message) -> None:
             sunday_str = end.isoformat()
             sunday_done = has_sunday and SUNDAY_TASK.key in daily_completed.get(sunday_str, set())
 
+            extra_pts = await get_extra_points_for_range(
+                child["id"], start.isoformat(), end.isoformat()
+            )
+            max_weekly = len(daily_tasks) * 7
+
             text = format_weekly_report(
                 child["name"], start, end, daily_completed, sunday_done,
                 daily_tasks=daily_tasks,
                 shower_required=shower_req,
+                extra_points_per_day=extra_pts,
+                max_weekly_points=max_weekly,
             )
             parts.append(text)
 
@@ -389,8 +392,11 @@ async def extra_points(message: Message, state: FSMContext) -> None:
             points = int(text)
             if points < 1:
                 raise ValueError
+            if points > 50:
+                await message.answer("❌ Максимум 50 баллов. Введите число от 1 до 50:")
+                return
         except ValueError:
-            await message.answer("❌ Введите положительное число:")
+            await message.answer("❌ Введите положительное число (1-50):")
             return
 
     user = await get_user(message.from_user.id)
@@ -616,8 +622,6 @@ async def cmd_reset_family(message: Message) -> None:
     if not user:
         return
 
-    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -748,16 +752,16 @@ async def reject_task_cb(callback: CallbackQuery) -> None:
     child = await get_user_by_id(completion["child_id"])
     child_name = child["name"] if child else "Ребёнок"
 
-    await reject_task(completion_id)
-
     new_caption = f"❌ Отклонено: {child_name} — <b>{label}</b>"
     await callback.message.edit_caption(caption=new_caption, parse_mode="HTML")
 
-    # Update messages for other parents
+    # Update messages for other parents BEFORE reject (reject deletes approval_messages)
     await _update_all_approval_messages(
         callback.bot, "task", completion_id, new_caption,
         skip_chat_id=callback.message.chat.id,
     )
+
+    await reject_task(completion_id)
 
     # Notify child
     if child:
@@ -838,16 +842,16 @@ async def reject_extra_cb(callback: CallbackQuery) -> None:
     child = await get_user_by_id(et["child_id"])
     child_name = child["name"] if child else "Ребёнок"
 
-    await reject_extra_task(extra_id)
-
     new_caption = f"❌ Отклонено: {child_name} — <b>{et['title']}</b>"
     await callback.message.edit_caption(caption=new_caption, parse_mode="HTML")
 
-    # Update messages for other parents
+    # Update messages for other parents BEFORE reject (reject deletes approval_messages)
     await _update_all_approval_messages(
         callback.bot, "extra", extra_id, new_caption,
         skip_chat_id=callback.message.chat.id,
     )
+
+    await reject_extra_task(extra_id)
 
     if child:
         try:

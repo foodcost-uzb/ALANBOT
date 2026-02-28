@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 
 from aiogram import Bot, F, Router
 from aiogram.filters import Command
@@ -8,6 +8,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
+from ..config import DEADLINE_HOUR, TIMEZONE
 from ..child_tasks import get_active_tasks_for_child, get_child_all_task_keys, get_task_label
 from ..database import (
     complete_extra_task,
@@ -33,6 +34,14 @@ class PhotoSubmit(StatesGroup):
 
 def _is_sunday(d: date | None = None) -> bool:
     return (d or date.today()).weekday() == 6
+
+
+def _is_past_deadline() -> bool:
+    """Check if current time is past DEADLINE_HOUR in the configured timezone."""
+    import zoneinfo
+    tz = zoneinfo.ZoneInfo(TIMEZONE)
+    now = datetime.now(tz)
+    return now.hour >= DEADLINE_HOUR
 
 
 async def _require_child(message_or_cb) -> dict | None:
@@ -237,19 +246,24 @@ async def receive_media(message: Message, state: FSMContext) -> None:
         return
 
     await state.clear()
-    await message.answer(f"🕐 Задача «{label}» отправлена на проверку родителю!")
+
+    late = _is_past_deadline()
+    late_warn = "\n⚠️ Задача сдана после 22:00" if late else ""
+    await message.answer(f"🕐 Задача «{label}» отправлена на проверку родителю!{late_warn}")
 
     # Notify parents with media + approval buttons
     parents = await get_family_parents(user["family_id"])
     kb = approval_kb(completion_id, is_extra=is_extra)
     approval_type = "extra" if is_extra else "task"
+    late_caption = "\n⚠️ Сдано после 22:00" if late else ""
     for parent in parents:
         try:
+            caption = f"🕐 {user['name']} выполнил(а): <b>{label}</b>\nОжидает одобрения{late_caption}"
             if media_type == "video":
                 sent = await message.bot.send_video(
                     parent["telegram_id"],
                     video=file_id,
-                    caption=f"🕐 {user['name']} выполнил(а): <b>{label}</b>\nОжидает одобрения",
+                    caption=caption,
                     parse_mode="HTML",
                     reply_markup=kb,
                 )
@@ -257,7 +271,7 @@ async def receive_media(message: Message, state: FSMContext) -> None:
                 sent = await message.bot.send_photo(
                     parent["telegram_id"],
                     photo=file_id,
-                    caption=f"🕐 {user['name']} выполнил(а): <b>{label}</b>\nОжидает одобрения",
+                    caption=caption,
                     parse_mode="HTML",
                     reply_markup=kb,
                 )

@@ -111,18 +111,14 @@ async def complete_task(
     child_id: int, task_key: str, today: str, photo_file_id: str | None = None, media_type: str = "photo"
 ) -> int:
     db = await get_db()
-    await db.execute(
+    cursor = await db.execute(
         """INSERT OR REPLACE INTO completions
            (child_id, task_key, date, photo_file_id, media_type, approved)
            VALUES (?, ?, ?, ?, ?, 0)""",
         (child_id, task_key, today, photo_file_id, media_type),
     )
     await db.commit()
-    rows = await db.execute_fetchall(
-        "SELECT id FROM completions WHERE child_id = ? AND task_key = ? AND date = ?",
-        (child_id, task_key, today),
-    )
-    return rows[0]["id"]
+    return cursor.lastrowid
 
 
 async def uncomplete_task(child_id: int, task_key: str, today: str) -> None:
@@ -151,6 +147,10 @@ async def approve_completion(completion_id: int) -> None:
 async def reject_completion(completion_id: int) -> None:
     db = await get_db()
     await db.execute("DELETE FROM completions WHERE id = ?", (completion_id,))
+    await db.execute(
+        "DELETE FROM approval_messages WHERE approval_type = 'task' AND approval_id = ?",
+        (completion_id,),
+    )
     await db.commit()
 
 
@@ -204,6 +204,10 @@ async def reject_extra_task(task_id: int) -> None:
         "UPDATE extra_tasks SET completed = 0, photo_file_id = NULL, approved = 0 WHERE id = ?",
         (task_id,),
     )
+    await db.execute(
+        "DELETE FROM approval_messages WHERE approval_type = 'extra' AND approval_id = ?",
+        (task_id,),
+    )
     await db.commit()
 
 
@@ -225,7 +229,7 @@ async def get_extra_points_for_date(child_id: int, day: str) -> int:
         "SELECT SUM(points) as pts FROM extra_tasks WHERE child_id = ? AND date = ? AND completed = 1 AND approved = 1",
         (child_id, day),
     )
-    return rows[0]["pts"] or 0 if rows and rows[0]["pts"] else 0
+    return (rows[0]["pts"] or 0) if rows else 0
 
 
 async def get_extra_points_for_range(
@@ -387,8 +391,24 @@ async def delete_family(family_id: int) -> list[int]:
     )
     child_ids = [r["id"] for r in child_rows]
     for cid in child_ids:
+        completion_rows = await db.execute_fetchall(
+            "SELECT id FROM completions WHERE child_id = ?", (cid,)
+        )
+        for cr in completion_rows:
+            await db.execute(
+                "DELETE FROM approval_messages WHERE approval_type = 'task' AND approval_id = ?",
+                (cr["id"],),
+            )
         await db.execute("DELETE FROM completions WHERE child_id = ?", (cid,))
         await db.execute("DELETE FROM child_tasks WHERE child_id = ?", (cid,))
+    extra_rows = await db.execute_fetchall(
+        "SELECT id FROM extra_tasks WHERE family_id = ?", (family_id,)
+    )
+    for er in extra_rows:
+        await db.execute(
+            "DELETE FROM approval_messages WHERE approval_type = 'extra' AND approval_id = ?",
+            (er["id"],),
+        )
     await db.execute("DELETE FROM extra_tasks WHERE family_id = ?", (family_id,))
     await db.execute("DELETE FROM users WHERE family_id = ?", (family_id,))
     await db.execute("DELETE FROM families WHERE id = ?", (family_id,))

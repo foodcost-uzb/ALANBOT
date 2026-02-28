@@ -27,7 +27,7 @@ const ParentExtrasView = (() => {
                 </div>
                 <div class="form-group">
                     <label>Бонусные баллы</label>
-                    <input type="number" class="form-input" id="extra-points" value="1" min="1" max="10">
+                    <input type="number" class="form-input" id="extra-points" value="1" min="1" max="50">
                 </div>
                 <button class="btn btn-primary mt-12" id="submit-extra">Назначить задание</button>
                 <div id="extra-result" class="mt-12 text-center"></div>

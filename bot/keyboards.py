@@ -61,7 +61,7 @@ def checklist_kb(
 
     current_group = None
     for t in tasks:
-        if t.group == "sunday":
+        if t.group in ("sunday", "custom"):
             continue
         if t.group != current_group:
             current_group = t.group

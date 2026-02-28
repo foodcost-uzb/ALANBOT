@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import random
 from datetime import date, timedelta
@@ -12,8 +13,7 @@ from .child_tasks import (
     get_active_daily_tasks,
 )
 from .config import (
-    EVENING_HOUR,
-    EVENING_MINUTE,
+    DEADLINE_HOUR,
     MORNING_HOUR,
     MORNING_MINUTE,
     REMINDER_HOURS,
@@ -23,6 +23,8 @@ from .database import (
     get_all_families,
     get_completed_keys_for_date,
     get_completed_keys_for_range,
+    get_extra_points_for_date,
+    get_extra_points_for_range,
     get_family_children,
     get_family_parents,
 )
@@ -36,6 +38,30 @@ from .scoring import (
 from .tasks_config import REMINDER_MESSAGES, SUNDAY_TASK
 
 logger = logging.getLogger(__name__)
+
+MAX_RETRIES = 2
+RETRY_DELAY = 3  # seconds
+
+
+async def _send_with_retry(coro_factory, description: str) -> bool:
+    """Retry a send operation up to MAX_RETRIES times on failure."""
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            await coro_factory()
+            return True
+        except Exception as e:
+            if attempt < MAX_RETRIES:
+                logger.warning(
+                    "%s failed (attempt %d/%d): %s — retrying in %ds",
+                    description, attempt + 1, MAX_RETRIES + 1, e, RETRY_DELAY,
+                )
+                await asyncio.sleep(RETRY_DELAY)
+            else:
+                logger.error(
+                    "%s failed after %d attempts: %s",
+                    description, MAX_RETRIES + 1, e,
+                )
+    return False
 
 
 def setup_scheduler(bot: Bot) -> AsyncIOScheduler:
@@ -60,10 +86,10 @@ def setup_scheduler(bot: Bot) -> AsyncIOScheduler:
             replace_existing=True,
         )
 
-    # Evening summary at 21:00 — to parents AND child
+    # Evening summary at DEADLINE_HOUR (default 22:00) — to parents AND child
     scheduler.add_job(
         evening_summary,
-        CronTrigger(hour=EVENING_HOUR, minute=EVENING_MINUTE, timezone=TIMEZONE),
+        CronTrigger(hour=DEADLINE_HOUR, minute=0, timezone=TIMEZONE),
         args=[bot],
         id="evening_summary",
         replace_existing=True,
@@ -88,14 +114,10 @@ async def morning_checklist(bot: Bot) -> None:
     for family in families:
         children = await get_family_children(family["id"])
         for child in children:
-            try:
-                await send_checklist(bot, child["telegram_id"])
-            except Exception as e:
-                logger.error(
-                    "Failed to send checklist to %s: %s",
-                    child["telegram_id"],
-                    e,
-                )
+            await _send_with_retry(
+                lambda c=child: send_checklist(bot, c["telegram_id"]),
+                f"morning checklist to {child['telegram_id']}",
+            )
 
 
 async def send_reminders(bot: Bot) -> None:
@@ -159,6 +181,11 @@ async def evening_summary(bot: Bot) -> None:
                 shower_req = await child_has_shower(child["id"])
                 has_sunday = await child_has_sunday_task(child["id"])
 
+                # Extra points for today
+                extra_pts_today = await get_extra_points_for_date(
+                    child["id"], today_str
+                )
+
                 # Parent summary
                 parent_text = format_daily_summary(
                     child["name"],
@@ -167,6 +194,7 @@ async def evening_summary(bot: Bot) -> None:
                     is_sunday and has_sunday,
                     daily_tasks=daily_tasks,
                     shower_required=shower_req,
+                    extra_points=extra_pts_today,
                 )
                 for parent in parents:
                     try:
@@ -182,22 +210,31 @@ async def evening_summary(bot: Bot) -> None:
 
                 # Calculate weekly points so far (excluding today)
                 weekly_points_so_far = 0
+                extra_weekly_so_far = 0
                 for i in range(today.weekday()):
                     d = (week_start + timedelta(days=i)).isoformat()
                     day_keys = await get_completed_keys_for_date(child["id"], d)
                     weekly_points_so_far += calculate_daily_points(
                         day_keys, daily_tasks, shower_req
                     )
+                    extra_weekly_so_far += await get_extra_points_for_date(
+                        child["id"], d
+                    )
+
+                max_weekly = len(daily_tasks) * 7
 
                 # Child evening summary
                 child_text = format_child_evening_summary(
                     child["name"],
                     today,
                     completed_today,
-                    weekly_points_so_far,
+                    weekly_points_so_far + extra_weekly_so_far,
                     days_left,
                     daily_tasks=daily_tasks,
                     shower_required=shower_req,
+                    extra_points_today=extra_pts_today,
+                    extra_weekly=extra_weekly_so_far + extra_pts_today,
+                    max_weekly_points=max_weekly,
                 )
                 await bot.send_message(
                     child["telegram_id"], child_text, parse_mode="HTML"
@@ -236,10 +273,17 @@ async def weekly_report(bot: Bot) -> None:
             daily_tasks = await get_active_daily_tasks(child["id"])
             shower_req = await child_has_shower(child["id"])
 
+            extra_pts = await get_extra_points_for_range(
+                child["id"], start.isoformat(), end.isoformat()
+            )
+            max_weekly = len(daily_tasks) * 7
+
             text = format_weekly_report(
                 child["name"], start, end, daily_completed, sunday_done,
                 daily_tasks=daily_tasks,
                 shower_required=shower_req,
+                extra_points_per_day=extra_pts,
+                max_weekly_points=max_weekly,
             )
             for parent in parents:
                 try:
