@@ -26,23 +26,23 @@ Both processes share one SQLite DB (`data/bot.db`) via WAL mode.
 ## Project structure
 
 ### Bot (Telegram)
-- `bot/config.py` — env variables (BOT_TOKEN, TIMEZONE, hours, password)
-- `bot/tasks_config.py` — fixed daily tasks, scoring constants, money tiers, motivational messages
-- `bot/scoring.py` — pure scoring functions (daily/weekly points, money %, deficit calc, summaries)
+- `bot/config.py` — env variables (BOT_TOKEN, TIMEZONE, hours, password, DEADLINE_HOUR)
+- `bot/tasks_config.py` — fixed daily tasks, adaptive tier thresholds (TIER_THRESHOLDS), scoring constants, motivational messages
+- `bot/scoring.py` — pure scoring functions (daily/weekly points, adaptive money %, extra points, deficit calc, summaries)
 - `bot/database.py` — DB init, migrations, completions + extra_tasks + family password queries
 - `bot/keyboards.py` — inline keyboards (role selection, checklist with extras, child picker, task manager, approvals)
 - `bot/child_tasks.py` — per-child task helpers (active tasks, shower check, labels)
 - `bot/handlers/start.py` — /start, role selection, password-protected parent registration
 - `bot/handlers/parent.py` — /today, /children, /invite, /report, /history, /extra, /tasks, /password, approval callbacks
 - `bot/handlers/child.py` — /checklist, photo/video confirmation FSM, toggle, extra task support
-- `bot/scheduler.py` — morning checklist (7:00), reminders (12:00, 17:00), evening summary (21:00), weekly report (Sun 20:00)
+- `bot/scheduler.py` — morning checklist (7:00), reminders (12:00, 17:00), evening summary (DEADLINE_HOUR, default 22:00), weekly report (Sun 20:00)
 - `bot/main.py` — entry point
 
 ### Mini App (Web)
 - `webapp/server.py` — aiohttp entry point, static serving, SPA fallback
 - `webapp/auth.py` — Telegram initData HMAC-SHA256 validation middleware
 - `webapp/db.py` — standalone DB connection (WAL mode, imports `bot.scoring` + `bot.tasks_config`)
-- `webapp/notify.py` — Telegram Bot API HTTP calls (sendMessage, getFile)
+- `webapp/notify.py` — Telegram Bot API HTTP calls (sendMessage, sendPhoto/Video, editCaption, getFile, approval message sync)
 - `webapp/routes/auth_routes.py` — `GET /api/me`
 - `webapp/routes/child_routes.py` — checklist, photo upload, uncomplete, extras, media proxy
 - `webapp/routes/parent_routes.py` — children, today, report, history, approvals, extras, tasks, invite
@@ -113,28 +113,36 @@ Both processes share one SQLite DB (`data/bot.db`) via WAL mode.
 - Per-child customization: parents can enable/disable standard tasks and add custom ones
 - Shower rule: if shower not done (and enabled), entire day = 0 points
 - Sunday: extra task "room_clean" — if not done, -5 penalty from weekly total
-- Extra tasks: parent-assigned bonus points (added on top of daily points)
-- Weekly money tiers: 50-56 → 100%, 42-49 → 70%, 35-41 → 40%, <35 → 0%
+- Extra tasks: parent-assigned bonus points (1-50), included in daily/weekly totals and money %
+- Adaptive weekly money tiers (TIER_THRESHOLDS in tasks_config.py):
+  - ≥89.2% of max → 100% money, ≥75% → 70%, ≥62.5% → 40%, below → 0%
+  - Max = enabled_tasks × 7 (adapts per child; e.g. 6 tasks → max 42, not fixed 56)
+  - Extra points add to total but money % is capped at 100%
+- Soft deadline at DEADLINE_HOUR (default 22:00): late submissions show warning, not blocked
 
 ## Approval workflow
-- All task completions require photo/video confirmation
+- All task completions require photo/video confirmation (max 20MB upload)
 - Submitted tasks get status "pending" (🕐) — `approved = 0`
 - Parents approve (✅ → `approved = 1`) or reject (❌ → record deleted)
 - Only approved tasks count toward scoring
 - Telegram notifications sent to parents on submission, to children on approve/reject
+- Cross-parent sync: approval messages updated for all parents on approve/reject (via `approval_messages` table)
+- Family ownership enforced: parents can only approve/reject tasks from their own family
 
 ## Scheduler
-- 7:00 — morning checklist to all children
+- 7:00 — morning checklist to all children (with retry on failure)
 - 12:00, 17:00 — motivational reminders if tasks incomplete
-- 21:00 — evening summary to parents + child (with deficit to next tier)
-- Sunday 20:00 — weekly report to parents
+- DEADLINE_HOUR (22:00) — evening summary to parents + child (with extra points, deficit to next tier)
+- Sunday 20:00 — weekly report to parents (with extra points per day)
 
 ## Database tables
 - `families` — id, invite_code, parent_password
 - `users` — id, telegram_id, role, family_id, name
-- `completions` — child_id, task_key, date, photo_file_id, approved, media_type
+- `completions` — child_id, task_key, date, photo_file_id, approved, media_type, completed_at
 - `extra_tasks` — family_id, child_id, title, points, date, completed, photo_file_id, approved, media_type
 - `child_tasks` — child_id, task_key, label, task_group, is_standard, enabled, sort_order
+- `approval_messages` — approval_type (task/extra), approval_id, chat_id, message_id (for cross-parent sync)
+- Indexes: `idx_completions_child_date`, `idx_completions_child_date_approved`, `idx_extra_tasks_child_date`, `idx_extra_tasks_family`
 
 ## Photo storage
 - Bot: stores Telegram `file_id` strings in DB
